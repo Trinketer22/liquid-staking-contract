@@ -1,4 +1,4 @@
-import {toNano} from "ton-core";
+import {toNano} from "@ton/core";
 
 export abstract class Conf {
     static readonly electorOpValue = toNano('1.03');
