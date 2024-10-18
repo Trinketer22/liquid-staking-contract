@@ -13,6 +13,7 @@ import { differentAddress, getRandomInt, getRandomTon } from '../utils';
 import { getMsgPrices } from '../fees';
 import { flattenTransaction } from '@ton/test-utils';
 import { serialize } from 'v8';
+import { setUncaughtExceptionCaptureCallback } from 'process';
 
 describe('Governor actions tests', () => {
     let pool_code: Cell;
@@ -632,8 +633,9 @@ describe('Governor actions tests', () => {
         await bc.loadFrom(prevState);
     });
     it('Should update loans per validator', async () => {
-        const prevState  = bc.snapshot();
-        const dataBefore = await pool.getFullData();
+        const prevState   = bc.snapshot();
+        const dataBefore  = await pool.getFullData();
+        const stateBefore = await getContractData(pool.address);
 
         const updateCode = await compile('UpdatePool');
 
@@ -651,7 +653,7 @@ describe('Governor actions tests', () => {
         const afterUpgrade = codeDict.get(7777)!;
         expect(afterUpgrade).not.toBeUndefined();
 
-        const res = await pool.sendUpgrade(deployer.getSender(), null, null, afterUpgrade);
+        let res = await pool.sendUpgrade(deployer.getSender(), null, null, afterUpgrade);
         // console.log(res.transactions[1].blockchainLogs);
         // console.log(res.transactions[1].vmLogs);
         expect(res.transactions).toHaveTransaction({
@@ -665,6 +667,9 @@ describe('Governor actions tests', () => {
         expect(dataAfter.maxLoan).not.toEqual(dataBefore.maxLoan);
         expect(dataAfter.maxLoan).toEqual(toNano('3000000'));
 
+        // Check that pool is functional after modifying callback execution via rollback upgrade
+        res = await pool.sendUpgrade(deployer.getSender(), stateBefore, null, null);
+        expect(await getContractData(pool.address)).toEqualCell(stateBefore)
         await bc.loadFrom(prevState);
     });
     });
