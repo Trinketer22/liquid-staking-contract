@@ -1,5 +1,5 @@
 import { Blockchain, BlockchainSnapshot, BlockchainTransaction, internal, SandboxContract, TreasuryContract } from '@ton/sandbox';
-import { Address, Cell, toNano, Dictionary, beginCell, Sender, SendMode, Slice } from '@ton/core';
+import { Address, Cell, toNano, Dictionary, DictionaryValue, beginCell, Sender, SendMode, Slice } from '@ton/core';
 import { Pool } from '../wrappers/Pool';
 import { Controller } from '../wrappers/Controller';
 import { JettonMinter as DAOJettonMinter, jettonContentToCell } from '../contracts/jetton_dao/wrappers/JettonMinter';
@@ -12,6 +12,7 @@ import { Errors } from '../PoolConstants';
 import { differentAddress, getRandomInt, getRandomTon } from '../utils';
 import { getMsgPrices } from '../fees';
 import { flattenTransaction } from '@ton/test-utils';
+import { serialize } from 'v8';
 
 describe('Governor actions tests', () => {
     let pool_code: Cell;
@@ -628,6 +629,42 @@ describe('Governor actions tests', () => {
           from: pool.address,
           to: testAddr
         });
+        await bc.loadFrom(prevState);
+    });
+    it('Should update loans per validator', async () => {
+        const prevState  = bc.snapshot();
+        const dataBefore = await pool.getFullData();
+
+        const updateCode = await compile('UpdatePool');
+
+        const CodeSegment : () => DictionaryValue<Cell> = () => {
+            return  {
+                parse: (src) => {
+                    return beginCell().storeSlice(src).endCell();
+                },
+                serialize: (src, builder) => {
+                    builder.storeSlice(src.asSlice())
+                }
+            }
+        };
+        const codeDict   = Dictionary.loadDirect(Dictionary.Keys.Uint(19), CodeSegment(), updateCode.refs[0]);
+        const afterUpgrade = codeDict.get(7777)!;
+        expect(afterUpgrade).not.toBeUndefined();
+
+        const res = await pool.sendUpgrade(deployer.getSender(), null, null, afterUpgrade);
+        // console.log(res.transactions[1].blockchainLogs);
+        // console.log(res.transactions[1].vmLogs);
+        expect(res.transactions).toHaveTransaction({
+            on: pool.address,
+            op: Op.sudo.upgrade,
+            aborted: false
+        });
+        const dataAfter = await pool.getFullData();
+        expect(dataAfter.minLoan).not.toEqual(dataBefore.minLoan);
+        expect(dataAfter.minLoan).toEqual(toNano('300000'));
+        expect(dataAfter.maxLoan).not.toEqual(dataBefore.maxLoan);
+        expect(dataAfter.maxLoan).toEqual(toNano('3000000'));
+
         await bc.loadFrom(prevState);
     });
     });
