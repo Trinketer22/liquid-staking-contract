@@ -454,9 +454,9 @@ describe('Controller & Pool', () => {
                 from: pool.address,
                 to: poolConfig.interest_manager,
                 op: Op.interestManager.stats, // interest_manager::stats
-                body: (x: Cell) => {
-                    let s = x.beginParse();
-                    s.loadUint(32 + 64); // op, query id
+                body: (x) => {
+                    let s = x!.beginParse();
+                    s.skip(32 + 64); // op, query id
                     let borrowed = s.loadCoins();
                     return borrowed == 0n; // there were no previous "previous borrowers"
                 }

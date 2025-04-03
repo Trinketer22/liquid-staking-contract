@@ -1330,8 +1330,8 @@ describe('Integrational tests', () => {
             from: controller.address,
             to: pool.address,
             op: Op.pool.request_loan,
-            body: (x) => {x!;
-                const rs = x.beginParse().skip(64 + 32);
+            body: (x) => {
+                const rs = x!.beginParse().skip(64 + 32);
                 // That's probably too much
                 const minLoanSent = rs.loadCoins();
                 const maxLoanSent = rs.loadCoins();

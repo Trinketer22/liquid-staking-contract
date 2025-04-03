@@ -248,8 +248,8 @@ describe('Distributor NFT Collection', () => {
                     from: userWalletAddr,
                     to: owner,
                     op: Op.transfer_notification,
-                    body: (x) => {x!
-                        let cs = x.beginParse().skip(32 + 64)
+                    body: (x) => {
+                        let cs = x!.beginParse().skip(32 + 64)
                         let jetton_amount = cs.loadCoins()
                        return (expectedJettonsRecieved + 5n >= jetton_amount)
                            || (jetton_amount >= expectedJettonsRecieved - 5n)
