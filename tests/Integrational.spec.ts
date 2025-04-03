@@ -2,7 +2,7 @@ import { Blockchain,BlockchainSnapshot, BlockchainTransaction, createShardAccoun
 import { Address, Cell, beginCell, toNano, Sender, Dictionary } from '@ton/core';
 import { compile } from '@ton/blueprint';
 import '@ton/test-utils';
-import { keyPairFromSeed, getSecureRandomBytes, getSecureRandomWords, KeyPair } from 'ton-crypto';
+import { keyPairFromSeed, getSecureRandomBytes, getSecureRandomWords, KeyPair } from '@ton/crypto';
 import { JettonMinter as DAOJettonMinter, jettonContentToCell } from '../contracts/jetton_dao/wrappers/JettonMinter';
 import { JettonWallet as DAOWallet } from '../wrappers/JettonWallet';
 import { Pool, PoolConfig } from '../wrappers/Pool';

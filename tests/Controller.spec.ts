@@ -1,7 +1,7 @@
 import { Blockchain,BlockchainSnapshot, createShardAccount,internal,SandboxContract,SendMessageResult,SmartContractTransaction,TreasuryContract } from "@ton/sandbox";
 import { ApproveOptions, Controller, ControllerConfig, controllerConfigToCell } from '../wrappers/Controller';
 import { Address, Sender, Cell, toNano, Dictionary, beginCell } from '@ton/core';
-import { keyPairFromSeed, getSecureRandomBytes, getSecureRandomWords, KeyPair } from 'ton-crypto';
+import { keyPairFromSeed, getSecureRandomBytes, getSecureRandomWords, KeyPair } from '@ton/crypto';
 import '@ton/test-utils';
 import { compile } from '@ton/blueprint';
 import { FlatTransactionComparable, randomAddress } from "@ton/test-utils";
