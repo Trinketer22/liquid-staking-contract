@@ -149,7 +149,7 @@ export class Controller implements Contract {
                 .storeUint(query_id, 64)
                .endCell();
     }
-    async sendApprove(provider: ContractProvider, via: Sender, approve: boolean = true, amount: bigint = toNano('0.1'), query_id: bigint | number = 0) {
+    async sendApprove(provider: ContractProvider, via: Sender, approve: boolean = true, amount: bigint = toNano('0.2'), query_id: bigint | number = 0) {
         // dissaprove support
         const op = approve ? Op.controller.approve : Op.controller.disapprove;
 
