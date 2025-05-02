@@ -167,7 +167,7 @@ describe('Distributor NFT Collection', () => {
         const jwalletSmc = await blockchain.getContract(jwalletAddr);
         let res: SmartContractTransaction;
         if (asset == "TON") {
-            res = collectionSmc.receiveMessage(internal({
+            res = await collectionSmc.receiveMessage(internal({
                 from: deployer.address,
                 to: collection.address,
                 body: PayoutCollection.startDistributionMessage(),
@@ -176,7 +176,7 @@ describe('Distributor NFT Collection', () => {
         } else {
             const body = DAOJettonMinter.mintMessage(collection.address, assetAmount, toNano("0.1"), toNano("0.5"));
             const minterSmc = await blockchain.getContract(poolJetton.address);
-            res = minterSmc.receiveMessage(internal({
+            res = await minterSmc.receiveMessage(internal({
                 from: deployer.address,
                 to: poolJetton.address,
                 body, value: toNano("1")
@@ -184,11 +184,11 @@ describe('Distributor NFT Collection', () => {
             const internalTransferMsg = res.outMessages.get(0);
             if (!internalTransferMsg)
                 throw Error("Expected to have outcoming message");
-            res = jwalletSmc.receiveMessage(internalTransferMsg);
+            res = await jwalletSmc.receiveMessage(internalTransferMsg);
             const transferNotification = res.outMessages.get(0);
             if (!transferNotification)
                 throw Error("Expected to have outcoming message");
-            res = collectionSmc.receiveMessage(transferNotification);
+            res = await collectionSmc.receiveMessage(transferNotification);
         }
         expect(computedGeneric(res).success).toEqual(true);
 
@@ -206,7 +206,7 @@ describe('Distributor NFT Collection', () => {
 
             const nftSmc = await blockchain.getContract(nftAddr);
             // ! because if undefined, it will throw in destinationAddress
-            res = nftSmc.receiveMessage(burnRequestMsg!);
+            res = await nftSmc.receiveMessage(burnRequestMsg!);
 
             expect(nftSmc.balance).toEqual(0n); // should send with 128
 
@@ -216,7 +216,7 @@ describe('Distributor NFT Collection', () => {
             dest = destinationAddress(burnNotificationMsg);
             expect(dest.equals(collection.address)).toEqual(true);
 
-            const notificationResult = collectionSmc.receiveMessage(burnNotificationMsg!);
+            const notificationResult = await collectionSmc.receiveMessage(burnNotificationMsg!);
             expect(computedGeneric(notificationResult).success).toEqual(true);
 
             // asset distribution

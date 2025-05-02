@@ -596,7 +596,7 @@ describe('Cotroller mock', () => {
                                       reqBalance - controllerSmc.balance + toNano('1'));
 
 
-        const res = controllerSmc.receiveMessage(internal({
+        const res = await controllerSmc.receiveMessage(internal({
           from: validator.wallet.address,
           to: controller.address,
           body: Controller.requestLoanMessage(minLoan, maxLoan, interest),
@@ -938,7 +938,7 @@ describe('Cotroller mock', () => {
         const maxInterest = getRandomInt(100, 300) << 8;
         const reqLoanMsg  = Controller.requestLoanMessage(loanAmount, loanAmount, maxInterest);
         const controllerSmc = await bc.getContract(controller.address);
-        const reqRes  =  controllerSmc.receiveMessage(internal({
+        const reqRes  =  await controllerSmc.receiveMessage(internal({
           from: validator.wallet.address,
           to: controller.address,
           body: reqLoanMsg,
@@ -1279,7 +1279,7 @@ describe('Cotroller mock', () => {
         const notPool = differentAddress(poolAddress);
         const repay   = getRandomTon(100000, 200000);
         const stateBefore = await getControllerState();
-        const res = controllerSmc.receiveMessage(internal({
+        const res = await controllerSmc.receiveMessage(internal({
           from: notPool,
           to: controller.address,
           value: repay,
@@ -1294,7 +1294,7 @@ describe('Cotroller mock', () => {
         const notPool = differentAddress(poolAddress);
         const repay   = getRandomTon(100000, 200000);
         const bounceTime = getCurTime();
-        const res = controllerSmc.receiveMessage(internal({
+        const res = await controllerSmc.receiveMessage(internal({
           from: poolAddress,
           to: controller.address,
           value: repay,
@@ -1433,7 +1433,7 @@ describe('Cotroller mock', () => {
       it('New stake ok message should only be accepted from elector', async () => {
         await loadSnapshot('stake_sent');
         const stateBefore = await getContractData(controller.address);
-        await bc.sendMessage(internal({
+        const res = await bc.sendMessage(internal({
           from: differentAddress(electorAddress),
           to: controller.address,
           body: simpleBody(Op.elector.new_stake_ok, 1),
@@ -1492,7 +1492,7 @@ describe('Cotroller mock', () => {
         await loadSnapshot('stake_sent');
         const controllerSmc = await bc.getContract(controller.address);
 
-        await controllerSmc.receiveMessage(internal({
+        const res = await controllerSmc.receiveMessage(internal({
           from: electorAddress,
           to: controller.address,
           body: bouncedBody(Op.elector.new_stake, 1),

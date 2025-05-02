@@ -259,7 +259,7 @@ describe('Controller & Pool', () => {
 
             const poolSmc = await blockchain.getContract(pool.address);
 
-            const requestLoanResult = poolSmc.receiveMessage(internal({
+            const requestLoanResult = await poolSmc.receiveMessage(internal({
                 from: anotherController.address,
                 to: pool.address,
                 value: toNano('0.5'),
@@ -279,7 +279,7 @@ describe('Controller & Pool', () => {
             const anotherController = blockchain.openContract(Controller.createFromConfig(anotherControllerConfig, controller_code));
 
             const poolSmc = await blockchain.getContract(pool.address);
-            const requestLoanResult = poolSmc.receiveMessage(internal({
+            const requestLoanResult = await poolSmc.receiveMessage(internal({
                 from: anotherController.address,
                 to: pool.address,
                 value: toNano('0.5'),
@@ -388,7 +388,7 @@ describe('Controller & Pool', () => {
                 const {id, addr} = controllers[i];
 
                 let body = loanRequestControllerIntoPool(minLoanRequestBody, id, deployer.address);
-                let result = poolSmc.receiveMessage(internal({
+                let result = await poolSmc.receiveMessage(internal({
                     from: addr,
                     to: pool.address,
                     value: toNano('0.5'),
@@ -400,7 +400,7 @@ describe('Controller & Pool', () => {
             }
             const {id, addr} = controllers[MAX_DEPTH];
             let body = loanRequestControllerIntoPool(minLoanRequestBody, id, deployer.address);
-            let result = poolSmc.receiveMessage(internal({
+            let result = await poolSmc.receiveMessage(internal({
                 from: addr,
                 to: pool.address,
                 value: toNano('0.5'),
