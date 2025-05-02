@@ -277,10 +277,11 @@ describe('Withdraw Fees Printer', () => {
         });
     });
 */
-    nftDistribution = true;
-    optimistic = false;
     describe('Withdraw Optimistic', () => {
-        beforeAll(deployAll);
+        beforeAll(async () => {
+            optimistic = true;
+            await deployAll();
+        });
         it('5 new wallets', async () => {
             await withdraw5('5 WITH NEW WALLETS (OPTIMISTIC)');
         });
@@ -291,9 +292,12 @@ describe('Withdraw Fees Printer', () => {
             await withdraw5("5 WITH NEW WALLETS, FIRST ROTATES (OPTIMISTIC)");
         });
     });
-    optimistic = true;
     describe('Withdraw Optimistic NFT', () => {
-        beforeAll(deployAll);
+        beforeAll(async () => {
+            optimistic = true;
+            nftDistribution = true;
+            await deployAll();
+        });
         it('5 new wallets', async () => {
             await withdraw5('5 WITH NEW WALLETS (NFT)');
         });

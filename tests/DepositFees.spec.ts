@@ -217,12 +217,15 @@ describe('Deposit Fees Printer', () => {
             Balance decrease: ${fromNano(totalDiff)} TON
             Deposited: ${fromNano(totalAdded)} TON
             Average Deposits cost: ${fromNano(totalFee/5n)} TON
+            Pool optimistic deposit gas:${depositTx!.gasUsed},
+            Pool optimistic deposit vmSteps:${depositTx!.vmSteps},
         `;
         console.log(toPrint);
     }
 
     async function deposit5 (header: string) {
-        let poolBalanceBefore = (await pool.getFinanceData()).totalBalance;
+        let poolData = await pool.getFinanceData();
+        let poolBalanceBefore = poolData.totalBalance + poolData.requestedForDeposit;
         const poolBalanceBeforeAll = poolBalanceBefore;
 
         const depositAmount = toNano(100);
@@ -234,8 +237,9 @@ describe('Deposit Fees Printer', () => {
         let balancesBefore: bigint[] = [];
         for (let i = 0; i < wallets.length; i++) {
             balancesBefore.push(await wallets[i].getBalance());
-            await pool.sendDeposit(wallets[i].getSender(), depositAmount + gasAttached);
-            const poolBalanceNow = (await pool.getFinanceData()).totalBalance;
+            const res = await pool.sendDeposit(wallets[i].getSender(), depositAmount + gasAttached);
+            let poolData = await pool.getFinanceData();
+            const poolBalanceNow = (await pool.getFinanceData()).totalBalance + poolData.requestedForDeposit;
             const addedToPool = poolBalanceNow - poolBalanceBefore;
             deposits.push(addedToPool);
             poolBalanceBefore = poolBalanceNow;
@@ -273,12 +277,17 @@ describe('Deposit Fees Printer', () => {
             Balance decrease: ${fromNano(totalDiff)} TON
             Deposited: ${fromNano(totalAdded)} TON
             Average Deposits cost: ${fromNano(totalFee/5n)} TON
+            Pool normal deposit gas:${depositTx!.gasUsed},
+            Pool normal deposit vmSteps:${depositTx!.vmSteps},
         `;
         console.log(toPrint);
     }
 
     describe('Deposit Normal', () => {
-        beforeAll(deployAll);
+        beforeAll(async () => {
+            optimistic = false;
+            await deployAll()
+        });
         it('5 new wallets', async () => {
             await deposit5("5 WITH NEW WALLETS (NORMAL)");
         });
@@ -293,9 +302,11 @@ describe('Deposit Fees Printer', () => {
         });
     });
 
-    optimistic = true;
     describe('Deposit Optimistic', () => {
-        beforeAll(deployAll);
+        beforeAll(async () => {
+            optimistic = true;
+            await deployAll();
+        });
 
         it('5 new wallets', async () => {
             await deposit5Optimistic("5 WITH NEW WALLETS (OPTIMISTIC)");
@@ -319,9 +330,12 @@ describe('Deposit Fees Printer', () => {
         });
     });
 
-    nftDistribution = true;
     describe('Deposit Optimistic NFT', () => {
-        beforeAll(deployAll);
+        beforeAll(async () => {
+           nftDistribution = true;
+           optimistic = true;
+           await deployAll();
+        });
         it('5 new wallets', async () => {
             await deposit5Optimistic("5 WITH NEW WALLETS (NFT)");
         });
