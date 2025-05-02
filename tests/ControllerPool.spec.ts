@@ -6,10 +6,10 @@ import { JettonMinter as DAOJettonMinter, jettonContentToCell } from '../contrac
 import { setConsigliere } from '../wrappers/PayoutMinter.compile';
 import { getElectionsConf, getVset, loadConfig, packValidatorsSet } from "../wrappers/ValidatorUtils";
 import '@ton/test-utils';
-import { randomAddress } from "@ton/test-utils";
+import { findTransactionRequired, randomAddress } from "@ton/test-utils";
 import { compile } from '@ton/blueprint';
 import { Conf, Op } from "../PoolConstants";
-import { findCommon, computedGeneric } from '../utils';
+import { findCommon, computedGeneric, reportGas, reportCodeSize } from '../utils';
 
 const errors = {
     WRONG_SENDER: 0x9283,
@@ -98,6 +98,7 @@ describe('Controller & Pool', () => {
         payout_wallet_code = await compile('PayoutWallet');
 
         pool_code = await compile('Pool');
+        reportCodeSize("Pool code", pool_code);
         controller_code = await compile('Controller');
 
         dao_minter_code = await compile('DAOJettonMinter');
@@ -229,6 +230,15 @@ describe('Controller & Pool', () => {
                 to: controller.address,
                 success: true,
             });
+            const poolAcceptLoanTx = findTransactionRequired(requestLoanResult.transactions, {
+                on: pool.address,
+                from: controller.address,
+                op: Op.pool.request_loan,
+                aborted: false,
+            });
+
+            reportGas("Pool accept loan", poolAcceptLoanTx);
+
             const loan = await pool.getLoan(0, deployer.address);
             const { interestRate } = await pool.getFinanceData()
             const expectedInterest = loanRequestParams[1] * BigInt(interestRate) / (256n * 256n * 256n);
@@ -445,11 +455,13 @@ describe('Controller & Pool', () => {
             newVset();
             toElections();
             const newRoundLoanResult = await thirdController.sendRequestLoan(deployer.getSender(), toNano('10000'), toNano('20000'), Conf.testInterest);
-            expect(newRoundLoanResult.transactions).toHaveTransaction({
+            const rotateRound = findTransactionRequired(newRoundLoanResult.transactions, {
                 from: thirdController.address,
                 to: pool.address,
+                op: Op.pool.request_loan,
                 success: true
             });
+            reportGas("Pool accept loan + rotate round (empty finalizing)", rotateRound);
             expect(newRoundLoanResult.transactions).toHaveTransaction({
                 from: pool.address,
                 to: poolConfig.interest_manager,
@@ -512,11 +524,15 @@ describe('Controller & Pool', () => {
         it('should not rotate on the non-last loan repayment', async () => {
             newVset();
             const repayResult = await controller.sendReturnUnusedLoan(deployer.getSender());
-            expect(repayResult.transactions).toHaveTransaction({
+            const replayLoanTx = findTransactionRequired(repayResult.transactions, {
                 from: controller.address,
                 to: pool.address,
+                op: Op.pool.loan_repayment,
                 success: true
             });
+
+            reportGas("Repay loan (pool)", replayLoanTx);
+
             expect(repayResult.transactions).not.toHaveTransaction({
                 from: pool.address,
                 to: poolConfig.interest_manager,
@@ -532,11 +548,13 @@ describe('Controller & Pool', () => {
         });
         it('repaying of the last loan should rotate round', async () => {
             const repayLoanResult = await anotherController.sendReturnUnusedLoan(deployer.getSender());
-            expect(repayLoanResult.transactions).toHaveTransaction({
+            const repayLoanTx = findTransactionRequired(repayLoanResult.transactions, {
                 from: anotherController.address,
                 to: pool.address,
+                op: Op.pool.loan_repayment,
                 success: true
             });
+            reportGas("Repay loan (pool) + rotate round", repayLoanTx);
             expect(repayLoanResult.transactions).toHaveTransaction({
                 from: pool.address,
                 to: poolConfig.interest_manager,

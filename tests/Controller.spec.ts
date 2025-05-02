@@ -1,12 +1,12 @@
 import { Blockchain,BlockchainSnapshot, createShardAccount,internal,SandboxContract,SendMessageResult,SmartContractTransaction,TreasuryContract } from "@ton/sandbox";
 import { ApproveOptions, Controller, ControllerConfig, controllerConfigToCell } from '../wrappers/Controller';
-import { Address, Sender, Cell, toNano, Dictionary, beginCell } from '@ton/core';
+import { Address, Sender, Cell, toNano, Dictionary, beginCell, Transaction } from '@ton/core';
 import { keyPairFromSeed, getSecureRandomBytes, getSecureRandomWords, KeyPair } from '@ton/crypto';
 import '@ton/test-utils';
 import { compile } from '@ton/blueprint';
-import { FlatTransactionComparable, randomAddress } from "@ton/test-utils";
+import { findTransactionRequired, FlatTransactionComparable, randomAddress } from "@ton/test-utils";
 import { calcMaxPunishment, getElectionsConf, getValidatorsConf, getVset, loadConfig, packValidatorsSet } from "../wrappers/ValidatorUtils";
-import { buff2bigint, computedGeneric, differentAddress, getMsgExcess, getRandomInt, getRandomTon, sendBulkMessage } from "../utils";
+import { buff2bigint, computedGeneric, differentAddress, getMsgExcess, getRandomInt, getRandomTon, reportCodeSize, reportGas, sendBulkMessage } from "../utils";
 import { Conf, ControllerState, Errors, Op } from "../PoolConstants";
 import { computeMessageForwardFees, getMsgPrices } from "../fees";
 
@@ -55,6 +55,9 @@ describe('Cotroller mock', () => {
         bc = await Blockchain.create();
         deployer = await bc.treasury('deployer', {balance: toNano("1000000000")});
         controller_code = await compile('Controller');
+
+        reportCodeSize("controller code", controller_code);
+
         validator = {
             wallet: await bc.treasury('validator'),
             keys: keyPairFromSeed(await getSecureRandomBytes(32))
@@ -278,6 +281,13 @@ describe('Cotroller mock', () => {
         expect(dataBefore.sudoer).toBe(null);
         sudoerTime = getCurTime();
         const res = await controller.sendSetSudoer(deployer.getSender(), deployer.address);
+        const setSudoTx = findTransactionRequired(res.transactions, {
+            on: controller.address,
+            from: deployer.address,
+            op: Op.governor.set_sudoer,
+            aborted: false
+        });
+        reportGas("Set sudoer", setSudoTx);
         const dataAfter = await controller.getControllerData();
         expect(dataAfter.sudoer).toEqualAddress(deployer.address);
         sudoSet = bc.snapshot();
@@ -340,6 +350,14 @@ describe('Cotroller mock', () => {
         });
 
         const res = await controller.sendSudoMsg(deployer.getSender(), 0, sudoMsg);
+        const sudoSendMessage = findTransactionRequired(res.transactions, {
+            on: controller.address,
+            from: deployer.address,
+            op: Op.sudo.send_message,
+            aborted: false,
+            outMessagesCount: 1
+        });
+        reportGas("Sudo send message", sudoSendMessage);
         expect(res.transactions).toHaveTransaction({
           from: controller.address,
           to: testAddr,
@@ -365,6 +383,15 @@ describe('Cotroller mock', () => {
         const dataBefore = await controller.getControllerData();
         expect(dataBefore.halted).toEqual(false);
         const res = await controller.sendHaltMessage(deployer.getSender());
+
+        const haltTx = findTransactionRequired(res.transactions, {
+            on: controller.address,
+            from: deployer.address,
+            op: Op.halter.halt,
+            aborted: false
+        });
+        reportGas("Halt controller", haltTx);
+
         const dataAfter = await controller.getControllerData();
         expect(dataAfter.halted).toEqual(true);
         snapStates.set('halted', bc.snapshot());
@@ -388,6 +415,13 @@ describe('Cotroller mock', () => {
         const dataBefore = await controller.getControllerData();
         expect(dataBefore.halted).toEqual(true);
         const res = await controller.sendUnhalt(deployer.getSender());
+        const unhaltTx = findTransactionRequired(res.transactions, {
+            on: controller.address,
+            from: deployer.address,
+            op: Op.governor.unhalt,
+            aborted: false
+        });
+        reportGas("Unhalt controller", unhaltTx);
 
         const dataAfter = await controller.getControllerData();
         expect(dataAfter.halted).toEqual(false);
@@ -511,6 +545,14 @@ describe('Cotroller mock', () => {
 
       const res = await testApprove(Errors.success, deployer.getSender(), true, approveExtra);
 
+      const approveExtTx = findTransactionRequired(res.transactions, {
+          on: controller.address,
+          from: deployer.address,
+          op: Op.controller.approve_extended,
+          aborted: false
+      });
+      reportGas("Approve extended", approveExtTx);
+
       snapStates.set('profit_share_set', bc.snapshot());
       await bc.loadFrom(prevState);
     });
@@ -558,7 +600,15 @@ describe('Cotroller mock', () => {
       expect(res.transactions).not.toHaveTransaction(shareMissmatch);
     });
     it('Approve from approver address should set approve flag', async () => {
-      await testApprove(0, deployer.getSender(), true);
+      const res = await testApprove(0, deployer.getSender(), true);
+
+      const approveTx = findTransactionRequired(res.transactions, {
+          on: controller.address,
+          op: Op.controller.approve,
+          aborted: false
+      });
+      reportGas("Approve controller", approveTx);
+
       snapStates.set('approved', bc.snapshot());
     });
     it('Disapprove should only be accepted from approver address', async () => {
@@ -568,7 +618,14 @@ describe('Cotroller mock', () => {
     });
     it('Disapprove from approver address should unset approve flag', async () => {
       await loadSnapshot('approved');
-      await testApprove(0, deployer.getSender(), false)
+      const res = await testApprove(0, deployer.getSender(), false)
+
+      const disapproveTx = findTransactionRequired(res.transactions, {
+          on: controller.address,
+          op: Op.controller.disapprove,
+          aborted: false
+      });
+      reportGas("Disapprove controller", disapproveTx);
     });
 
     describe('Request loan', () => {
@@ -608,6 +665,8 @@ describe('Cotroller mock', () => {
         if(reqMsg.info.type !== "internal")
           throw Error("Should be internal");
         expect(reqMsg.body.beginParse().preloadUint(32)).toEqual(Op.pool.request_loan);
+
+        reportGas("Request loan (on controller)", res);
 
         const dataAfter = await controller.getControllerData();
         expect(dataAfter.state).toEqual(ControllerState.SENT_BORROWING_REQUEST);
@@ -1075,6 +1134,15 @@ describe('Cotroller mock', () => {
       });
       const borrowTime = getCurTime();
       res = await controller.sendCredit(bc.sender(poolAddress), borrowAmount, loanAmount);
+
+      const receiveCreditTx = findTransactionRequired(res.transactions, {
+          on: controller.address,
+          from: poolAddress,
+          op: Op.controller.credit,
+          aborted: false
+      });
+      reportGas("Receive credit", receiveCreditTx);
+
       const stateAfter = await controller.getControllerData();
       expect(stateAfter.borrowedAmount).toEqual(stateBefore.borrowedAmount + borrowAmount);
       expect(stateAfter.borrowingTime).toEqual(borrowTime);
@@ -1165,6 +1233,9 @@ describe('Cotroller mock', () => {
         expect(res.transactions[1].outMessagesCount).toEqual(2);
         const retLoan = trans.outMessages.get(0)!;
         const excess  = trans.outMessages.get(1)!;
+
+        reportGas("Return loan (no reward)", trans);
+
         expect(res.transactions).toHaveTransaction({
           from: controller.address,
           to: poolAddress,
@@ -1210,6 +1281,9 @@ describe('Cotroller mock', () => {
           to: deployer.address,
           value: Conf.stakeRecoverFine - fwdFees.fees - fwdFees.remaining
         });
+
+        reportGas("Return loan (with reward)", trans);
+
         const dataAfter = await controller.getControllerData();
         expect(dataAfter.borrowedAmount).toEqual(0n);
         expect(dataAfter.borrowingTime).toEqual(0);
@@ -1301,6 +1375,8 @@ describe('Cotroller mock', () => {
           bounced: true,
           body: bouncedBody(Op.pool.loan_repayment, 1),
         }),{now: bc.now});
+
+        reportGas("Loan repayment bounce", res);
 
         const dataAfter  = await controller.getControllerData();
         expect(dataAfter.borrowedAmount).toEqual(repay);
@@ -1415,6 +1491,8 @@ describe('Cotroller mock', () => {
           body: newStakeMsg,
           value: Conf.electorOpValue
         }), {now:bc.now ?? Math.floor(Date.now() / 1000)});
+
+        reportGas("New stake", res);
         // We can't use it with mock, because message will bounce back (no elector contract).
         //let res = await testNewStake(0, validator.wallet.getSender(), deposit);
         const stateAfter  = await controller.getControllerData();
@@ -1454,23 +1532,29 @@ describe('Cotroller mock', () => {
       })
       it('New stake ok message from elector should set state to staken', async () => {
         await loadSnapshot('stake_sent');
-        await bc.sendMessage(internal({
+
+        const res = await bc.sendMessage(internal({
           from: electorAddress,
           to: controller.address,
           body: simpleBody(Op.elector.new_stake_ok, 1),
           value: toNano('1')
         }));
+
+        reportGas("New stake ok", res.transactions[0]);
+
         expect((await controller.getControllerData()).state).toEqual(ControllerState.FUNDS_STAKEN);
         snapStates.set('staken', bc.snapshot());
       });
       it('New stake error message from elector should set state to rest', async () => {
         await loadSnapshot('stake_sent');
-        await bc.sendMessage(internal({
+        const res = await bc.sendMessage(internal({
           from: electorAddress,
           to: controller.address,
           body: simpleBody(Op.elector.new_stake_error, 1),
           value: toNano('1')
         }));
+
+        reportGas("New stake error", res.transactions[0]);
         expect((await controller.getControllerData()).state).toEqual(ControllerState.REST);
       });
 
@@ -1499,6 +1583,8 @@ describe('Cotroller mock', () => {
           value: toNano('1'),
           bounced: true
         }), {now: bc.now ?? Math.floor(Date.now() / 1000)});
+
+        reportGas("New stake bounce", res);
         const dataAfter = await controller.getControllerData();
         expect(dataAfter.state).toEqual(ControllerState.REST);
       });
@@ -1552,11 +1638,15 @@ describe('Cotroller mock', () => {
         recoverReady = bc.snapshot();
 
         res = await controller.sendRecoverStake(vSender);
-        expect(res.transactions).toHaveTransaction({
+
+        const recTx = findTransactionRequired(res.transactions, {
           from: validator.wallet.address,
           to: controller.address,
+          op: Op.controller.recover_stake,
           success: true
         });
+        reportGas("Recover stake", recTx);
+
         expect(res.transactions).toHaveTransaction(recTrans);
 
         expect((await controller.getControllerData()).state).toEqual(ControllerState.SENT_RECOVER_REQUEST);
@@ -1640,6 +1730,9 @@ describe('Cotroller mock', () => {
        });
 
        const trans = res.transactions[1];
+
+       reportGas("Recover stake with reward", trans);
+
        expect(trans.outMessagesCount).toEqual(2);
        const rewardMsg = trans.outMessages.get(1)!;
        const fwdFees   = computeMessageForwardFees(msgConfMc, rewardMsg);
@@ -1757,6 +1850,9 @@ describe('Cotroller mock', () => {
           body: recoverStakeOk,
           value: stateBefore.borrowedAmount + toNano('10000')
         }), {now: bc.now});
+
+        reportGas("Recover stake ok (elector->controller)", res);
+
         expect(res.outMessagesCount).toEqual(1);
         const repayMsg = res.outMessages.get(0)!;
         // TS type check
@@ -1961,11 +2057,21 @@ describe('Cotroller mock', () => {
  
         const vSender = validator.wallet.getSender();
 
+        let updateHashTx: Transaction;
+
         for(let i = 1; i < 4; i++) {
           const newSetCell = randVset();
           const msgVal     = getRandomTon(1, 10);
           const changeTime = getCurTime();
           const res = await controller.sendUpdateHash(vSender, msgVal);
+          updateHashTx = findTransactionRequired(res.transactions, {
+              on: controller.address,
+              from: validator.wallet.address,
+              op: Op.controller.update_validator_hash,
+              aborted: false,
+              outMessagesCount: 1
+          });
+
           const dataAfter = await controller.getControllerData();
           await assertHashUpdate(newSetCell.hash(), changeTime, i);
           /*
@@ -1973,15 +2079,14 @@ describe('Cotroller mock', () => {
           expect(dataAfter.validatorSetChangeCount).toEqual(i);
           expect(dataAfter.validatorSetChangeTime).toEqual(changeTime);
           */
-          const excessTrans = res.transactions[1];
-          expect(excessTrans.outMessagesCount).toEqual(1);
-          const excessMsg   = excessTrans.outMessages.get(0)!;
+          const excessMsg   = updateHashTx.outMessages.get(0)!;
           expect(res.transactions).toHaveTransaction({
             from: controller.address,
             to: validator.wallet.address,
-            value: getMsgExcess(excessTrans, excessMsg, msgVal, msgConfMc)
+            value: getMsgExcess(updateHashTx, excessMsg, msgVal, msgConfMc)
           });
         }
+        reportGas("Update validator hash (on controller)", updateHashTx!);
         // Saving for later
         threeSetState =  bc.snapshot();
       });
@@ -2010,6 +2115,8 @@ describe('Cotroller mock', () => {
 
       });
       it('After grace period anyone should be able to update validators set and get rewarded(except validator)', async() => {
+        let updTrans: Transaction;
+
         for(let i = 1; i < 3; i++) {
           const newSetCell = randVset();
           const curVset = getVset(bc.config, 34);
@@ -2021,8 +2128,14 @@ describe('Cotroller mock', () => {
 
           await assertHashUpdate(newSetCell.hash(), changeTime, i);
 
-          const updTrans = res.transactions[1];
-          expect(updTrans.outMessagesCount).toEqual(1);
+          updTrans = findTransactionRequired(res.transactions, {
+              on: controller.address,
+              from: deployer.address,
+              op: Op.controller.update_validator_hash,
+              aborted: false,
+              outMessagesCount: 1
+          });
+
           const rewardMsg = updTrans.outMessages.get(0)!;
           const fwdFees = computeMessageForwardFees(msgConfMc, rewardMsg);
           expect(res.transactions).toHaveTransaction({
@@ -2031,6 +2144,8 @@ describe('Cotroller mock', () => {
             value: Conf.hashUpdateFine - fwdFees.fees - fwdFees.remaining
           });
         }
+
+        reportGas("Update validator hash (on controller) with reward", updTrans!);
         // But only if there is > min storage + hash update fine on balance
         const minReq = Conf.minStorageController + Conf.hashUpdateFine;
         const msgVal = toNano('1');
@@ -2174,8 +2289,13 @@ describe('Cotroller mock', () => {
         const availableFunds = (await controller.getValidatorAmount()) - Conf.minStorageController;
 
         const res = await testValidatorWithdraw(Errors.success, validator.wallet.getSender(), availableFunds);
-        const trans = res.transactions[1];
-        expect(trans.outMessagesCount).toEqual(1);
+        const trans = findTransactionRequired(res.transactions, {
+            on: controller.address,
+            from: validator.wallet.address,
+            op: Op.controller.withdraw_validator,
+            aborted: false,
+            outMessagesCount: 1
+        });
         const retMsg = trans.outMessages.get(0)!;
         const fwdFees = computeMessageForwardFees(msgConfMc, retMsg);
         expect(res.transactions).toHaveTransaction({
@@ -2183,6 +2303,8 @@ describe('Cotroller mock', () => {
           to: validator.wallet.address,
           value: availableFunds - fwdFees.fees - fwdFees.remaining
         });
+
+        reportGas("Validator withdraw", trans);
       });
     });
     // Goes last to have all states available

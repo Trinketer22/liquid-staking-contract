@@ -1,5 +1,5 @@
 import { Blockchain, SandboxContract, TreasuryContract, BlockchainSnapshot, printTransactionFees, prettyLogTransactions } from '@ton/sandbox';
-import { Cell, toNano, fromNano, beginCell, Address, Dictionary } from '@ton/core';
+import { Cell, toNano, fromNano, beginCell, Address, Dictionary, Transaction, TransactionComputeVm } from '@ton/core';
 import { Pool } from '../wrappers/Pool';
 import { Controller } from '../wrappers/Controller';
 import { JettonMinter as DAOJettonMinter, jettonContentToCell } from '../contracts/jetton_dao/wrappers/JettonMinter';
@@ -9,6 +9,9 @@ import { getElectionsConf, getVset, loadConfig, packValidatorsSet } from "../wra
 import '@ton/test-utils';
 import { readFileSync } from 'fs';
 import { compile } from '@ton/blueprint';
+import { findTransactionRequired } from '@ton/test-utils';
+import { Op } from '../PoolConstants';
+import { computedGeneric } from '../utils';
 
 // TODO: something strange with 'first rotates the round' tests.
 // do we actually need them?
@@ -200,6 +203,7 @@ describe('Withdraw Fees Printer', () => {
         const gasAttached = toNano(1);
 
         // withdraw from all wallets
+        let burnTx: TransactionComputeVm[] = [];
         let jAmounts: bigint[] = [];
         let balancesBefore: bigint[] = [];
         let withdrawals: bigint[] = [];
@@ -214,6 +218,11 @@ describe('Withdraw Fees Printer', () => {
             const jettonAmount = await myPoolJettonWallet.getJettonBalance();
             jAmounts.push(jettonAmount);
             const res = await myPoolJettonWallet.sendBurnWithParams(wallets[i].getSender(), gasAttached, jettonAmount, wallets[i].address, waitTillRoundEnd, fillOrKill);
+            burnTx.push(computedGeneric(findTransactionRequired(res.transactions, {
+                from: poolJetton.address,
+                on: pool.address,
+                aborted: false
+            })));
             if(waitTillRoundEnd) { // next round ratio
               withdrawals.push(jettonAmount * poolData.projectedTotalBalance / poolData.projectedPoolSupply);
             } else { // this round ratio
@@ -250,6 +259,8 @@ describe('Withdraw Fees Printer', () => {
                 Balance increase: ${fromNano(received)} TON
                 Withdrawed amount: ${fromNano(withdrawals[i])} TON
                 Withdrawal cost is ${fromNano(cost)} TON
+                Withdrawal gas is ${burnTx[i].gasUsed}
+                Withdrawal vmSteps is ${burnTx[i].vmSteps}
            `;
         }
 

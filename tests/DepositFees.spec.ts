@@ -1,5 +1,5 @@
 import { Blockchain, SandboxContract, TreasuryContract, BlockchainSnapshot } from '@ton/sandbox';
-import { Cell, toNano, fromNano, beginCell, Address, Dictionary } from '@ton/core';
+import { Cell, toNano, fromNano, beginCell, Address, Dictionary, Transaction, TransactionComputeVm } from '@ton/core';
 import { Pool } from '../wrappers/Pool';
 import { Controller } from '../wrappers/Controller';
 import { JettonMinter as DAOJettonMinter, jettonContentToCell } from '../contracts/jetton_dao/wrappers/JettonMinter';
@@ -8,6 +8,9 @@ import { getElectionsConf, getVset, loadConfig, packValidatorsSet } from "../wra
 import '@ton/test-utils';
 import { readFileSync } from 'fs';
 import { compile } from '@ton/blueprint';
+import { findTransactionRequired } from '@ton/test-utils';
+import { Op } from '../PoolConstants';
+import { computedGeneric, reportGas } from '../utils';
 
 export function readCompiled(name: string): Cell {
     const filename = 'build/' + name + '.compiled.json';
@@ -161,6 +164,13 @@ describe('Deposit Fees Printer', () => {
             deploy: true,
             success: true,
         });
+        const deployControllerTx = findTransactionRequired(controllerDeployResult.transactions, {
+            on: pool.address,
+            from: deployer.address,
+            op: Op.pool.deploy_controller,
+            aborted: false
+        });
+        reportGas("Deploy controller", deployControllerTx);
         const approveResult = await controller.sendApprove(deployer.getSender());
         expect(approveResult.transactions).toHaveTransaction({
             from: deployer.address,
@@ -183,9 +193,18 @@ describe('Deposit Fees Printer', () => {
         let diffs: bigint[] = [];
         let fees: bigint[] = [];
         let deposits: bigint[] = [];
+        let depositTx: TransactionComputeVm;
         for (let i = 0; i < wallets.length; i++) {
             const balanceBefore = await wallets[i].getBalance();
             let x = await pool.sendDeposit(wallets[i].getSender(), depositAmount + gasAttached);
+            if(i == 0) {
+            depositTx = computedGeneric(findTransactionRequired(x.transactions, {
+                on: pool.address,
+                from: wallets[i].address,
+                op: Op.pool.deposit,
+                aborted: false
+            }));
+            }
             //printTransactionFees(x.transactions);
             let poolBalanceNow = (await pool.getFinanceData()).totalBalance;
             const addedToPool = poolBalanceNow - poolBalanceBefore;
@@ -235,9 +254,18 @@ describe('Deposit Fees Printer', () => {
         let fees: bigint[] = [];
         let deposits: bigint[] = [];
         let balancesBefore: bigint[] = [];
+        let depositTx: TransactionComputeVm;
         for (let i = 0; i < wallets.length; i++) {
             balancesBefore.push(await wallets[i].getBalance());
             const res = await pool.sendDeposit(wallets[i].getSender(), depositAmount + gasAttached);
+            if(i == 0) {
+            depositTx = computedGeneric(findTransactionRequired(res.transactions, {
+                on: pool.address,
+                from: wallets[i].address,
+                op: Op.pool.deposit,
+                aborted: false
+            }));
+            }
             let poolData = await pool.getFinanceData();
             const poolBalanceNow = (await pool.getFinanceData()).totalBalance + poolData.requestedForDeposit;
             const addedToPool = poolBalanceNow - poolBalanceBefore;

@@ -9,9 +9,9 @@ import { compile } from '@ton/blueprint';
 import { Conf, Op } from "../PoolConstants";
 import { randomAddress } from '../contracts/jetton_dao/tests/utils';
 import { Errors } from '../PoolConstants';
-import { differentAddress, getRandomInt, getRandomTon } from '../utils';
+import { differentAddress, getRandomInt, getRandomTon, reportGas } from '../utils';
 import { getMsgPrices } from '../fees';
-import { flattenTransaction } from '@ton/test-utils';
+import { findTransactionRequired } from '@ton/test-utils';
 
 describe('Governor actions tests', () => {
     let pool_code: Cell;
@@ -232,12 +232,13 @@ describe('Governor actions tests', () => {
                 const poolBefore = await pool.getFullData();
                 const updTime    = bc.now! + Conf.governorQuarantine + getRandomInt(1, 60);
                 let res = await pool.sendPrepareGovernanceMigration(deployer.getSender(), updTime);
-                expect(res.transactions).toHaveTransaction({
+                const triggerMigrationTx = findTransactionRequired(res.transactions, {
                     on: pool.address,
                     from: deployer.address,
                     op: Op.governor.prepare_governance_migration,
                     success: true
                 });
+                reportGas("Start migration", triggerMigrationTx);
                 const poolAfter = await pool.getFullData();
                 expect(poolAfter.governorUpdateAfter).toEqual(updTime);
                 updateTime = updTime;
@@ -285,6 +286,15 @@ describe('Governor actions tests', () => {
                                                   approver: newApprover
                                               });
 
+
+                const setRolesTx = findTransactionRequired(res.transactions, {
+                    on: pool.address,
+                    from: deployer.address,
+                    op: Op.governor.set_roles,
+                    aborted: false,
+                });
+
+                reportGas("Set roles", setRolesTx);
 
                 await assertSetRoles(res.transactions, 0);
 
@@ -362,6 +372,7 @@ describe('Governor actions tests', () => {
                 assertExitCode(res.transactions, Errors.wrong_sender);
                 expect(dataBefore).toEqualCell(await getContractData(pool.address));
                 res = await pool.sendSetDepositSettings(bc.sender(newGovernor), msgVal, true, true);
+
                 assertExitCode(res.transactions, 0);
                 await bc.loadFrom(rollBack);
             });
@@ -371,6 +382,13 @@ describe('Governor actions tests', () => {
                 const optimistic = !poolBefore.optimisticDepositWithdrawals;
                 const depoOpened = !poolBefore.depositsOpen;
                 const res = await pool.sendSetDepositSettings(bc.sender(newGovernor), toNano('1'), optimistic, depoOpened, randomFee);
+                const setDepositTx = findTransactionRequired(res.transactions, {
+                    on: pool.address,
+                    from: newGovernor,
+                    aborted: false
+                });
+                reportGas("Set deposit settings", setDepositTx);
+
                 assertExitCode(res.transactions, 0);
 
                 let poolAfter = await pool.getFullData();
@@ -394,12 +412,13 @@ describe('Governor actions tests', () => {
 
                 for (let params of [[false, false], [true, false], [false, true], [true, true]]) {
                     const res = await pool.sendPartialHalt(bc.sender(newHalter), params[0], params[1]);
-                    expect(res.transactions).toHaveTransaction({
+                    const haltTx = findTransactionRequired(res.transactions, {
                         on: pool.address,
                         from: newHalter,
                         op: Op.halter.partial_halt,
                         aborted: false
                     });
+                    reportGas("Halt deposits with partial halt", haltTx);
                     const poolAfter = await pool.getFullData();
 
                     expect(poolAfter.optimisticDepositWithdrawals).toBe(!params[0]);
@@ -488,6 +507,12 @@ describe('Governor actions tests', () => {
                 const maxFee      = (1 << 24) - 1;
                 const newFee      = (poolBefore.governanceFee + getRandomInt(100, 200)) % maxFee;
                 const res = await pool.sendSetGovernanceFee(bc.sender(newGovernor), newFee);
+                const govFeeTx = findTransactionRequired(res.transactions, {
+                    on: pool.address,
+                    op: Op.governor.set_governance_fee,
+                    aborted: false
+                });
+                reportGas("Set governance fee:", govFeeTx);
                 assertExitCode(res.transactions, 0);
 
                 const poolAfter = await pool.getFullData();
@@ -515,6 +540,14 @@ describe('Governor actions tests', () => {
                 const newInterest    = (poolBefore.interestRate + getRandomInt(100, 200)) % maxInterest;
 
                 const res = await pool.sendSetInterest(bc.sender(newInterestManager), newInterest);
+
+                const setInterestTx = findTransactionRequired(res.transactions, {
+                    on: pool.address,
+                    op: Op.interestManager.set_interest,
+                    aborted: false
+                });
+                reportGas("Set interest", setInterestTx);
+
                 assertExitCode(res.transactions, 0);
 
                 const poolAfter = await pool.getFullData();
@@ -544,6 +577,14 @@ describe('Governor actions tests', () => {
 
                 const res = await pool.sendHaltMessage(bc.sender(newHalter));
                 assertExitCode(res.transactions, 0);
+
+                const haltTx = findTransactionRequired(res.transactions, {
+                    on: pool.address,
+                    from: newHalter,
+                    op: Op.halter.halt,
+                    aborted: false
+                });
+                reportGas("Full halt", haltTx);
 
                 const poolAfter = await pool.getFullData();
                 expect(poolAfter.halted).toBe(true);
@@ -645,6 +686,14 @@ describe('Governor actions tests', () => {
                 res = await pool.sendUnhalt(bc.sender(newGovernor));
                 assertExitCode(res.transactions, 0);
 
+                const unhaltTx = findTransactionRequired(res.transactions, {
+                    on: pool.address,
+                    from: newGovernor,
+                    op: Op.governor.unhalt,
+                    aborted: false
+                });
+                reportGas("Unhalt tx", unhaltTx);
+
                 const poolAfter = await pool.getFullData();
                 expect(poolAfter.halted).toBe(false);
             });
@@ -715,6 +764,7 @@ describe('Governor actions tests', () => {
         });
         await bc.loadFrom(prevState);
     });
+    // Tests above present in Controller.spec.ts
     it('Sudoer should be able to upgrade contract', async() => {
         const poolBefore = await pool.getFullData();
         expect(poolBefore.sudoer).toEqualAddress(deployer.address);
@@ -724,6 +774,12 @@ describe('Governor actions tests', () => {
         const mockCell = beginCell().storeUint(Date.now(), 64).endCell();
 
         const res = await pool.sendUpgrade(deployer.getSender(), mockCell, mockCell, execCell);
+        const updateTx = findTransactionRequired(res.transactions, {
+            on: pool.address,
+            from: deployer.address,
+            op: Op.sudo.upgrade
+        });
+        reportGas("Update contract", updateTx);
         expect(await getContractData(pool.address)).toEqualCell(mockCell);
         expect(await getContractCode(pool.address)).toEqualCell(mockCell);
 
