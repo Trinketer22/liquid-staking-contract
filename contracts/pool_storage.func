@@ -1,7 +1,7 @@
 #include "pool.func";
 #include "stdlib.func";
 ;;[borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit]
-(slice, ([cell, int, int, int, int, int, int])) ~load_round_data(slice s) inline {
+(slice, ([cell, int, int, int, int, int, int, int])) ~load_round_data(slice s) inline {
     slice ds = s~load_ref().begin_parse();
     var data = [ds~load_dict(),             ;; borrowers
                 ds~load_uint(32),           ;; round_id
@@ -9,12 +9,13 @@
                 ds~load_coins(),            ;; borrowed
                 ds~load_coins(),            ;; expected
                 ds~load_coins(),            ;; returned
-                ds~load_signed_coins()];    ;; profit
+                ds~load_signed_coins(),
+                ds.slice_empty?() ? 0 : ds~load_uint(64)];    ;; profit
    return (s, (data));
 }
 
-builder store_round_data(builder b, [cell, int, int, int, int, int, int] round_data) inline {
-  var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit] = round_data;
+builder store_round_data(builder b, [cell, int, int, int, int, int, int, int] round_data) inline {
+  var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit, profit_rate_prev2] = round_data;
   cell serialized = begin_cell()
                      .store_dict(borrowers_dict)
                      .store_uint(round_id, 32)
@@ -23,6 +24,7 @@ builder store_round_data(builder b, [cell, int, int, int, int, int, int] round_d
                      .store_coins(expected)
                      .store_coins(returned)
                      .store_signed_coins(profit)
+                     .store_uint(profit_rate_prev2, 64)
                      .end_cell();
   return b.store_ref(serialized);
 }

@@ -20,9 +20,9 @@ global int interest_rate; ;; times SHARE_BASIS == 2**24
 global [int, int, int] deposit_withdrawal_parameters;
 global int saved_validator_set_hash;
 
-;; [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit]
-global [cell, int, int, int, int, int, int] current_round_borrowers;
-global [cell, int, int, int, int, int, int] prev_round_borrowers;
+;; [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit, profit_rate_prev2]
+global [cell, int, int, int, int, int, int, int] current_round_borrowers;
+global [cell, int, int, int, int, int, int, int] prev_round_borrowers;
 
 ;;[min, max]
 global [int, int] loan_params_per_validator;
@@ -98,12 +98,12 @@ const int GOVERNOR_QUARANTINE = 86400; ;; 1 day
 () log_round_completion (int, int, int, int, int, int) impure;
 () log_round_rotation (int) impure;
 
-([cell, int, int, int, int, int, int], ()) finalize_lending_round([cell, int, int, int, int, int, int] borrowers_data, int available_balance)  impure; ;; called from close_loan
+[cell, int, int, int, int, int, int, int] finalize_lending_round([cell, int, int, int, int, int, int, int] borrowers_data, int available_balance)  impure; ;; called from close_loan
 () finalize_deposit_withdrawal_round (int available_balance, int round_id)  impure; ;; called from finalize_lending_round
 
 
-([cell, int, int, int, int, int, int], (int)) ~add_loan([cell, int, int, int, int, int, int] borrowers_data, slice borrower, int loan_body, int interest);
-([cell, int, int, int, int, int, int], (int, int)) ~close_loan([cell, int, int, int, int, int, int] borrowers_data, slice borrower, int amount);
+([cell, int, int, int, int, int, int, int], (int)) ~add_loan([cell, int, int, int, int, int, int, int] borrowers_data, slice borrower, int loan_body, int interest);
+([cell, int, int, int, int, int, int, int], (int, int)) ~close_loan([cell, int, int, int, int, int, int, int] borrowers_data, slice borrower, int amount);
 
 slice _get_controller_address (int controller_id, slice validator) method_id;
 (slice, cell) build_controller_address(int controller_id, slice validator);
@@ -143,19 +143,19 @@ int muldiv_extra(int a, int b, int c) inline {
     int current_hash = cell_hash(vset);
     if (saved_validator_set_hash != current_hash) {
 
-        var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit] = prev_round_borrowers;
+        var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit, _] = prev_round_borrowers;
 
         if((~ borrowers_dict.null?()) | (active_borrowers > 0)) {
             current_round_closed? = true;
             return ();
         }
         untouched_data = null();
-        prev_round_borrowers~finalize_lending_round(available_balance);
+        var new_round_borrowers = prev_round_borrowers.finalize_lending_round(available_balance);
 
         saved_validator_set_hash = current_hash;
         int round_index = current_round_index() + 1;
         log_round_rotation(round_index);
-        (prev_round_borrowers, current_round_borrowers) = (current_round_borrowers, [null(), round_index, 0, 0, 0, 0, 0]);
+        (prev_round_borrowers, current_round_borrowers) = (current_round_borrowers, new_round_borrowers);
         current_round_closed? = false;
     } else {
         current_round_closed? = false;
@@ -243,7 +243,7 @@ int muldiv_extra(int a, int b, int c) inline {
                 request_to_mint_withdrawal(response_address, jetton_amount, query_id);
             }
             ;;  conservatively use `borrowed` instead of `expected` as amount that will be returned
-            var [_, _, _, borrowed, _, _, _] = prev_round_borrowers;
+            var [_, _, _, borrowed, _, _, _, _] = prev_round_borrowers;
 
             ;; max(*, 0) is needed because optimistic withdrawals do not participate in sharing -FINALIZE_ROUND_FEE
             ;; When we have both optimistic and pessimistic withdrawals it is ok: pessimists will get both
@@ -410,7 +410,7 @@ int muldiv_extra(int a, int b, int c) inline {
               int creditable_funds = balance
                                      - muldiv_extra(requested_for_withdrawal, total_balance, supply)
                                      - MIN_TONS_FOR_STORAGE;
-              var [_, _, _, borrowed, _, _, _] = current_round_borrowers;
+              var [_, _, _, borrowed, _, _, _, _] = current_round_borrowers;
               int available_funds = min( creditable_funds,
                                          muldiv( (DISBALANCE_TOLERANCE_BASIS / 2) + disbalance_tolerance, total_balance, DISBALANCE_TOLERANCE_BASIS)
                                          - borrowed );
@@ -535,8 +535,8 @@ int muldiv_extra(int a, int b, int c) inline {
     return (controller_address, init_state);
 }
 
-([cell, int, int, int, int, int, int], (int)) ~add_loan([cell, int, int, int, int, int, int] borrowers_data, slice borrower, int loan_body, int interest) {
-    var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit] = borrowers_data;
+([cell, int, int, int, int, int, int, int], (int)) ~add_loan([cell, int, int, int, int, int, int, int] borrowers_data, slice borrower, int loan_body, int interest) {
+    var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit, profit_rate_prev2] = borrowers_data;
 
     (int wc, int addr_hash) = parse_std_addr(borrower);
     throw_unless(error::controller_in_wrong_workchain, wc == CONTROLLER_WORKCHAIN);
@@ -559,11 +559,11 @@ int muldiv_extra(int a, int b, int c) inline {
 
     throw_unless(error::credit_book_too_deep, cell_depth(borrowers_dict) < MAX_LOAN_DICT_DEPTH);
 
-    return ([borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit], already_borrowed);
+    return ([borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit, profit_rate_prev2], already_borrowed);
 }
 
-([cell, int, int, int, int, int, int], (int, int)) ~close_loan([cell, int, int, int, int, int, int] borrowers_data, slice borrower, int amount) {
-    var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit] = borrowers_data;
+([cell, int, int, int, int, int, int, int], (int, int)) ~close_loan([cell, int, int, int, int, int, int, int] borrowers_data, slice borrower, int amount) {
+    var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit, profit_rate_prev2] = borrowers_data;
 
     (int wc, int addr_hash) = parse_std_addr(borrower);
     throw_unless(error::controller_in_wrong_workchain, wc == CONTROLLER_WORKCHAIN);
@@ -583,16 +583,16 @@ int muldiv_extra(int a, int b, int c) inline {
 
     log_repayment(borrower, was_borrowed, amount - was_borrowed);
 
-    borrowers_data = [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit];
+    borrowers_data = [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit, profit_rate_prev2];
     int last_one = active_borrowers == 0;
 
     return (borrowers_data, (true, last_one));
 }
 
-([cell, int, int, int, int, int, int], ()) finalize_lending_round([cell, int, int, int, int, int, int] borrowers_data, int available_balance) impure {
+[cell, int, int, int, int, int, int, int] finalize_lending_round([cell, int, int, int, int, int, int, int] borrowers_data, int available_balance) impure {
     ;; Does all the necessary value checks, sends logs
     ;; and governor fees, nullifies variables.
-    var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit] = borrowers_data;
+    var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit, profit_rate_prev2] = borrowers_data;
     throw_unless(error::finalizing_active_credit_round, borrowers_dict.null?());
     throw_unless(error::finalizing_active_credit_round, active_borrowers == 0);
 
@@ -629,8 +629,14 @@ int muldiv_extra(int a, int b, int c) inline {
 
     finalize_deposit_withdrawal_round(available_balance, round_id);
 
+    ;; pool initializes with returned = borrowed = 0, set profit_rate_prev2 = 0 in this case
+    var profit_rate_prev2 = 0;
+    if (borrowed != 0) {
+        profit_rate_prev2 = muldiv((returned - borrowed), 10000000, borrowed);
+    }
+
     ;; do we need to nulify data here ???
-    return ([null(), round_id, 0, 0, 0, 0, 0], ());
+    return [null(), current_round_index() + 1, 0, 0, 0, 0, 0, profit_rate_prev2];
 }
 
 () log_loan(slice borrower, int amount) impure {
@@ -723,7 +729,7 @@ int muldiv_extra(int a, int b, int c) inline {
 }
 
 (int, int) _get_projected_conversion_ratio () inline {
-    var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit] = prev_round_borrowers;
+    var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit, profit_rate_prev2] = prev_round_borrowers;
     int expected_profit = expected - borrowed - FINALIZE_ROUND_FEE;
     int fee = max(muldiv(governance_fee_share, expected_profit, SHARE_BASIS), 0);
     expected_profit -= fee;
@@ -753,7 +759,7 @@ int muldiv_extra(int a, int b, int c) inline {
     }
     var round_borrowers = prev? ? prev_round_borrowers
                             : current_round_borrowers;
-    var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit] = round_borrowers;
+    var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit, _] = round_borrowers;
     (slice controller_address, _) = build_controller_address(controller_id, validator_address);
     (int wc, int addr_hash) = parse_std_addr(controller_address);
     (slice loan_data, int found?) = borrowers_dict.udict_get?(ADDR_SIZE, addr_hash);
@@ -822,7 +828,7 @@ var get_pool_full_data_raw() method_id {
     load_data();
     update_round(pair_first(get_balance()));
     var target = prev? ? prev_round_borrowers : current_round_borrowers;
-    var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit] = target;
+    var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit, _] = target;
     int found? = true;
     int address = -1;
     int loan_summ = 0;
@@ -864,7 +870,7 @@ int calculate_loan_amount(int min_loan, int max_loan, int max_interest) method_i
     int creditable_funds = pair_first(get_balance())
             - muldiv_extra(requested_for_withdrawal, total_balance, supply)
             - MIN_TONS_FOR_STORAGE;
-    var [_, _, _, borrowed, _, _, _] = current_round_borrowers;
+    var [_, _, _, borrowed, _, _, _, _] = current_round_borrowers;
     int available_funds = min( creditable_funds, muldiv((DISBALANCE_TOLERANCE_BASIS / 2) + disbalance_tolerance, total_balance, DISBALANCE_TOLERANCE_BASIS) - borrowed );
 
     [int min_loan_per_validator, int max_loan_per_validator] = loan_params_per_validator;

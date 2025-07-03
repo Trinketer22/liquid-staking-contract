@@ -115,6 +115,7 @@ describe('Integrational tests', () => {
                      totalBalance: bigint,
                      depositMinter: Address | null,
                      withdrawMinter: Address | null,
+                     profitRatePrev2?: bigint,
                     ) => Promise<bigint>;
     let assertNewPayout:(txs: BlockchainTransaction[],
                          expectNew: boolean,
@@ -711,11 +712,16 @@ describe('Integrational tests', () => {
                                supply: bigint,
                                totalBalance: bigint,
                                depositMinter: Address | null,
-                               withdrawMinter: Address | null) => {
+                               withdrawMinter: Address | null,
+                               profitRatePrev2?: bigint,) => {
             let fee        = 0n;
             let sentDuring = Conf.serviceNotificationAmount;
             const profit   = returned - borrowed - Conf.finalizeRoundFee;
             const curBalance = totalBalance + profit;
+            if(profitRatePrev2 !== undefined) {
+                const expectedProfitRatePrev2 = (returned - borrowed) * 10000000n / borrowed;
+                expect(expectedProfitRatePrev2).toEqual(profitRatePrev2);
+            }
             if(profit > 0) {
                 fee = Conf.governanceFee * profit / Conf.shareBase;
                 // console.log(`Governance fee:${fee}`);
@@ -1430,6 +1436,7 @@ describe('Integrational tests', () => {
         await elector.sendTickTock("tock"); // Update credits
 
         res = await controller.sendRecoverStake(validator.wallet.getSender());
+        const dataAfter = await pool.getFullData();
         // Should get more than borrowed
         expect(res.transactions).toHaveTransaction({
             from: elector.address,
@@ -1461,7 +1468,8 @@ describe('Integrational tests', () => {
                     dataBefore.supply,
                     dataBefore.totalBalance,
                     null,
-                    null)
+                    null,
+                    dataAfter.currentRound.profitRatePrev2)
 
 
         expect(await pool.getLoan(0, validator.wallet.address, true)).toEqual({
