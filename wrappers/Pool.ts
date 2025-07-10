@@ -411,7 +411,7 @@ export class Pool implements Contract {
    }
     async sendSetDepositSettings(provider: ContractProvider, via: Sender, value: bigint,
                                  optimistic: Boolean, depositOpen: Boolean,
-                                 instantWithdrawalFee: number = 0) {
+                                 instantWithdrawalFee: number = 0, revShare: number = 0) {
         await provider.internal(via, {
             value,
             sendMode: SendMode.PAY_GAS_SEPARATELY,
@@ -421,6 +421,7 @@ export class Pool implements Contract {
                      .storeUint(Number(optimistic), 1)
                      .storeUint(Number(depositOpen), 1)
                      .storeUint(instantWithdrawalFee, 24)
+                     .storeUint(revShare, 24)
                   .endCell(),
         });
     }
@@ -709,7 +710,7 @@ export class Pool implements Contract {
     }
     async getFullData(provider: ContractProvider) {
         let { stack } = await provider.get('get_pool_full_data', []);
-        let new_contract_version = stack.remaining == 34;
+        let contract_version = stack.remaining == 34 ? 2 : stack.remaining == 35 ? 3 : 1;
         let state = stack.readNumber() as State;
         let halted = stack.readBoolean();
         let totalBalance = stack.readBigNumber();
@@ -717,8 +718,12 @@ export class Pool implements Contract {
         let optimisticDepositWithdrawals = stack.readBoolean();
         let depositsOpen = stack.readBoolean();
         let instantWithdrawalFee = 0;
-        if(new_contract_version) {
+        if(contract_version >= 2) {
             instantWithdrawalFee = stack.readNumber();
+        }
+        let revShare = 0;
+        if (contract_version >= 3) {
+            revShare = stack.readNumber();
         }
         let savedValidatorSetHash = stack.readBigNumber();
 
@@ -769,7 +774,7 @@ export class Pool implements Contract {
         let accruedGovernanceFee = 0n;
         let disbalanceTolerance = 30;
         let creditStartPriorElectionsEnd = 0;
-        if(new_contract_version) {
+        if(contract_version >= 2) {
             accruedGovernanceFee = stack.readBigNumber();
             disbalanceTolerance = stack.readNumber();
             creditStartPriorElectionsEnd = stack.readNumber();
@@ -804,7 +809,7 @@ export class Pool implements Contract {
         return {
             state, halted,
             totalBalance, interestRate,
-            optimisticDepositWithdrawals, depositsOpen, instantWithdrawalFee,
+            optimisticDepositWithdrawals, depositsOpen, instantWithdrawalFee, revShare,
             savedValidatorSetHash,
 
             previousRound, currentRound,
@@ -833,7 +838,7 @@ export class Pool implements Contract {
 
     async getFullDataRaw(provider: ContractProvider) {
         let { stack } = await provider.get('get_pool_full_data_raw', []);
-        let new_contract_version = stack.remaining == 34;
+        let contract_version = stack.remaining == 34 ? 2 : stack.remaining == 35 ? 3 : 1;
         let state = stack.readNumber() as State;
         let halted = stack.readBoolean();
         let totalBalance = stack.readBigNumber();
@@ -841,8 +846,12 @@ export class Pool implements Contract {
         let optimisticDepositWithdrawals = stack.readBoolean();
         let depositsOpen = stack.readBoolean();
         let instantWithdrawalFee = 0;
-        if(new_contract_version) {
+        if(contract_version >= 2) {
             instantWithdrawalFee = stack.readNumber();
+        }
+        let revShare = 0;
+        if (contract_version >= 3) {
+            revShare = stack.readNumber();
         }
         let savedValidatorSetHash = stack.readBigNumber();
 
@@ -893,7 +902,7 @@ export class Pool implements Contract {
         let accruedGovernanceFee = 0n;
         let disbalanceTolerance = 30;
         let creditStartPriorElectionsEnd = 0;
-        if(new_contract_version) {
+        if(contract_version >= 2) {
             accruedGovernanceFee = stack.readBigNumber();
             disbalanceTolerance = stack.readNumber();
             creditStartPriorElectionsEnd = stack.readNumber();
@@ -928,7 +937,7 @@ export class Pool implements Contract {
         return {
             state, halted,
             totalBalance, interestRate,
-            optimisticDepositWithdrawals, depositsOpen, instantWithdrawalFee,
+            optimisticDepositWithdrawals, depositsOpen, instantWithdrawalFee, revShare,
             savedValidatorSetHash,
 
             previousRound, currentRound,

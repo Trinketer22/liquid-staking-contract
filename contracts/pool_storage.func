@@ -160,7 +160,7 @@ builder save_codes(builder pb) inline {
 global slice untouched_data;
 
 () load_data_new() impure inline_ref {
-
+    ;; 8 + 1 + 132 + 24 + 1 + 1 + 24 + 24 + 256 + 132 + 132 + 24 + 132 + 8 + 48 =  947
     slice ds = get_data().begin_parse();
     state = ds~load_uint(8);
     halted? = ds~load_bool();
@@ -171,8 +171,6 @@ global slice untouched_data;
     int optimistic_deposit_withdrawals = ds~load_bool();
     int deposits_open? = ds~load_bool();
     int instant_withdrawal_fee = ds~load_share();
-    deposit_withdrawal_parameters = [optimistic_deposit_withdrawals, deposits_open?,
-                                     instant_withdrawal_fee];
     saved_validator_set_hash = ds~load_uint(256);
     slice round_data = ds~load_ref().begin_parse();
     current_round_borrowers = round_data~load_round_data();
@@ -182,6 +180,13 @@ global slice untouched_data;
     accrued_governance_fee = ds~load_coins();
     disbalance_tolerance = ds~load_uint(DISBALANCE_BIT_SIZE);
     credit_start_prior_elections_end = ds~load_timestamp();
+
+    var rev_share = 0;
+    if (ds.slice_bits() != 0) {
+        rev_share = ds~load_share();
+    }
+    deposit_withdrawal_parameters = [optimistic_deposit_withdrawals, deposits_open?,
+        instant_withdrawal_fee, rev_share];
     ds~load_roles();
     ds~load_codes();
     ds.end_parse();
@@ -198,7 +203,7 @@ global slice untouched_data;
     interest_rate = ds~load_share();
     int optimistic_deposit_withdrawals = ds~load_bool();
     int deposits_open? = ds~load_bool();
-    deposit_withdrawal_parameters = [optimistic_deposit_withdrawals, deposits_open?, 0];
+    deposit_withdrawal_parameters = [optimistic_deposit_withdrawals, deposits_open?, 0, 0];
     saved_validator_set_hash = ds~load_uint(256);
     slice round_data = ds~load_ref().begin_parse();
     current_round_borrowers = round_data~load_round_data();
@@ -232,7 +237,8 @@ global slice untouched_data;
     [int min_loan_per_validator, int max_loan_per_validator] = loan_params_per_validator;
     [int optimistic_deposit_withdrawals,
      int deposits_open?,
-     int instant_withdrawal_fee] = deposit_withdrawal_parameters;
+     int instant_withdrawal_fee,
+     int rev_share] = deposit_withdrawal_parameters;
     ;; 8 + 1 + 124 + 24 + 1 + 1 + 256 + 124 + 124 + 24 + 8 + 48 + 24 + 124 + 124
     set_data(begin_cell()
         .store_uint(state, 8)
@@ -256,6 +262,7 @@ global slice untouched_data;
         .store_coins(accrued_governance_fee)
         .store_uint(disbalance_tolerance, DISBALANCE_BIT_SIZE)
         .store_timestamp(credit_start_prior_elections_end)
+        .store_share(rev_share)
         .save_roles()
         .save_codes()
         .end_cell()

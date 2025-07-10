@@ -54,6 +54,7 @@ export abstract class Op {
     }
     static readonly pool = {
         request_loan   : 0xe642c965,
+        request_loan2  : 0xba33982d,
         loan_repayment : 0xdfdca27b,
         deposit        : 0x47d54391,
         withdraw       : 0x319B0CDC,

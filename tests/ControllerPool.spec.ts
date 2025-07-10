@@ -205,7 +205,7 @@ describe('Controller & Pool', () => {
         const loanRequestControllerIntoPool: (reqBody: Cell, controllerId: number, valik: Address) => Cell =
             (reqBody, controllerId, valik) => {
                     return beginCell()
-                    .storeUint(Op.pool.request_loan, 32) // op pool::request_loan
+                    .storeUint(Op.pool.request_loan2, 32) // op pool::request_loan
                     // skip part with requesting to send a request to pool from controller
                     // send request to pool directly
                     .storeSlice(

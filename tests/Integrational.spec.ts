@@ -1,4 +1,15 @@
-import { Blockchain,BlockchainSnapshot, BlockchainTransaction, createShardAccount,internal,SandboxContract,SendMessageResult,SmartContractTransaction,TreasuryContract } from "@ton/sandbox";
+import {
+    Blockchain,
+    BlockchainSnapshot,
+    BlockchainTransaction,
+    createShardAccount,
+    internal,
+    printTransactionFees,
+    SandboxContract,
+    SendMessageResult,
+    SmartContractTransaction,
+    TreasuryContract,
+} from '@ton/sandbox';
 import { Address, Cell, beginCell, toNano, Sender, Dictionary } from '@ton/core';
 import { compile } from '@ton/blueprint';
 import '@ton/test-utils';
@@ -82,10 +93,10 @@ describe('Integrational tests', () => {
     let getCreditable:() => Promise<bigint>;
     let updateConfig:() => Promise<Cell>;
     let announceElections:() => Promise<number>;
-    let runElections:(profitable?: boolean) => Promise<void>;
+    let runElections:(profit: bigint) => Promise<void>;
     let waitNextRound:() => Promise<void>;
     let waitUnlock:(since: number) => void;
-    let nextRound:(profitable?: boolean, count?: number, post?:() => Promise<void>) => Promise<void>;
+    let nextRound:(profit?: bigint, count?: number, post?:() => Promise<void>) => Promise<void>;
     let compareBalance:(contractA: Address | SandboxContract<TreasuryContract>, contractB: Address | SandboxContract<TreasuryContract>, jetton?: boolean) => Promise<boolean>;
     let assertPoolJettonMint:(txs: BlockchainTransaction[],
                               amount: bigint,
@@ -392,17 +403,16 @@ describe('Integrational tests', () => {
           return curElections;
         }
 
-        runElections = async (profitable: boolean = true) => {
-
+        runElections = async (profit: bigint) => {
           await announceElections();
 
-          if(profitable) {
+          if(profit != 0n) {
             // Elector profits
             await bc.sendMessage(internal({
               from: new Address(-1, Buffer.alloc(32, 0)),
               to: elector.address,
               body: beginCell().endCell(),
-              value: toNano('100000'),
+              value: profit,
             }));
           }
 
@@ -458,9 +468,9 @@ describe('Integrational tests', () => {
           await elector.sendTickTock("tock");
         }
 
-        nextRound = async (profitable: boolean = true, count:number = 1, post?:() => void) => {
+        nextRound = async (profit?: bigint, count:number = 1, post?:() => void) => {
             while(count--) {
-                await runElections(profitable);
+                await runElections(profit ?? toNano('100000'));
                 await updateConfig();
                 await waitNextRound();
                 if(post) {
@@ -1063,7 +1073,26 @@ describe('Integrational tests', () => {
             if(controllerBalance < reqBalance && exp_success) {
                 await lender.sendTopUp(vSender, reqBalance - controllerBalance + toNano('1'));
             }
-            const res =await lender.sendRequestLoan(vSender, amount, amount, poolData.interestRate, min_profit_share);
+            const res = await (() => {
+                if (poolData.revShare > 0n) {
+                    return lender.sendRequestLoan(
+                        vSender,
+                        amount,
+                        amount,
+                        poolData.revShare,
+                        poolData.revShare
+                    );
+                } else {
+                    return lender.sendRequestLoan(
+                        vSender,
+                        amount,
+                        amount,
+                        poolData.interestRate,
+                        min_profit_share
+                    );
+                }
+            })();
+
             const succcesTx = {
                 from: pool.address,
                 to: lender.address,
@@ -1335,7 +1364,7 @@ describe('Integrational tests', () => {
         expect(res.transactions).toHaveTransaction({
             from: controller.address,
             to: pool.address,
-            op: Op.pool.request_loan,
+            op: Op.pool.request_loan2,
             body: (x) => {x!;
                 const rs = x.beginParse().skip(64 + 32);
                 // That's probably too much
@@ -1793,77 +1822,6 @@ describe('Integrational tests', () => {
                 from: pool.address
             });
         });
-        it('should return profit according to profit share', async () => {
-            await loadSnapshot('pre_withdraw');
-            const cat = await bc.treasury('FatCat');
-            const poolBefore = await pool.getFullData();
-            // We want to take some hefty chunk to exceed interest
-            const testProfitShare = 1 << 20;
-
-            let res = await controller.sendApproveExtended(deployer.getSender(), {
-                allocation: 0n,
-                startPriorElectionsEnd: 65536,
-                profitShare: testProfitShare
-            });
-
-            expect((await controller.getControllerData()).approverSetProfitShare).toEqual(testProfitShare);
-            await assertGetLoan(controller, sConf.min_stake, true, testProfitShare);
-            const expInterest = sConf.min_stake * BigInt(poolBefore.interestRate) / Conf.shareBase;
-            const poolLoaned = await pool.getFullData();
-            const electId = await announceElections();
-            res = await controller.sendNewStake(validator.wallet.getSender(),
-                                                sConf.min_stake + toNano('1'),
-                                                validator.keys.publicKey,
-                                                validator.keys.secretKey,
-                                                electId);
-            expect(res.transactions).toHaveTransaction({
-                from: elector.address,
-                to: controller.address,
-                op: Op.elector.new_stake_ok
-            });
-
-            const controllerBorrowed = await controller.getControllerData();
-
-            await nextRound();
-            await controller.sendUpdateHash(validator.wallet.getSender());
-            await nextRound();
-            await controller.sendUpdateHash(validator.wallet.getSender());
-            waitUnlock(getCurTime());
-            await elector.sendTickTock("tock"); // Announce elecitons
-            await elector.sendTickTock("tock"); // Update credits
-
-            res = await controller.sendRecoverStake(validator.wallet.getSender());
-
-            const returnStake = findTransaction(res.transactions, {
-                on: controller.address,
-                from: elector.address,
-                op: Op.elector.recover_stake_ok,
-                aborted: false
-            })!;
-            expect(returnStake).not.toBeUndefined();
-
-            const recMsg = returnStake.inMessage!;
-            if(recMsg.info.type !== 'internal') {
-                throw new Error("No way");
-            }
-
-            const profit = recMsg.info.value.coins - controllerBorrowed.stakeSent;
-            // console.log(`Profit: ${profit}`);
-            expect(profit).toBeGreaterThan(0n);
-            const profitShare = profit * BigInt(testProfitShare) / Conf.shareBase;
-            // console.log(`Borrowed amount: ${controllerBorrowed.borrowedAmount} ${sConf.min_stake}`);
-            // console.log(`Without interest: ${controllerBorrowed.borrowedAmount - expInterest}`);
-            // console.log(`Profit share:${profitShare}`);
-
-            // Should trigger loan repayment with according profit share
-            expect(res.transactions).toHaveTransaction({
-                from: controller.address,
-                to: pool.address,
-                op: Op.pool.loan_repayment,
-                value: controllerBorrowed.borrowedAmount - expInterest + profitShare,
-                success: true
-            })!;
-        });
         it('Should not be possible to fail distribution action phase with low burn msg value', async() => {
             await loadSnapshot('has_loan');
             const cat = await bc.treasury('FatCat');
@@ -2295,6 +2253,131 @@ describe('Integrational tests', () => {
             }
             roundId = 0;
         })
+
+        const SHARE_BASIS = 256 * 256 * 256;
+        const REV_SHARE = SHARE_BASIS / 2; // 50%
+
+        async function setupRevShareMode(opts: {
+            profits?: bigint[]
+        }) {
+            await loadSnapshot('long_initial');
+            const pollBefore = await pool.getFullData();
+            expect(pollBefore.revShare).toEqual(0);
+
+            await Promise.all(depositors.map(async x => await pool.sendDeposit(x.getSender(), toNano('100000'))));
+            for (let i = 0; i < 5; i++) {
+                await runVdAction(validators[0]);
+                let profit = opts.profits ? (opts.profits[i] == undefined ? toNano('100000') : opts.profits[i]) : toNano('100000');
+                await nextRound(profit);
+                await pool.sendTouch(deployer.getSender());
+                roundId++;
+            }
+
+            const res = await pool.sendSetDepositSettings(deployer.getSender(), toNano("0.3"), true, true, 0, REV_SHARE);
+            expect(res.transactions).toHaveTransaction({
+                from: deployer.address,
+                to: pool.address,
+                success: true
+            });
+        }
+
+        it('should set rev share', async () => {
+            await setupRevShareMode({});
+
+            let dataAfter = await pool.getFullData();
+            expect(dataAfter.previousRound.profitRatePrev2).toEqual(15258n);
+            expect(dataAfter.currentRound.profitRatePrev2).toEqual(15258n);
+            expect(dataAfter.revShare).toEqual(REV_SHARE);
+        });
+
+        it('should calculate profit rate based on the rev_share', async () => {
+            await setupRevShareMode({});
+
+            for (let i = 0; i < 4; i++) {
+                await runVdAction(validators[0]);
+                let profit = toNano('1000') * BigInt(i + 1);
+                await nextRound(profit);
+                await pool.sendTouch(deployer.getSender());
+                roundId++;
+            }
+
+            let dataAfter = await pool.getFullData();
+            expect(dataAfter.previousRound.profitRatePrev2).toEqual(25381n);
+            expect(dataAfter.currentRound.profitRatePrev2).toEqual(26377n);
+            expect(dataAfter.revShare).toEqual(REV_SHARE);
+        });
+
+        it('should instant withdraw with price from prev round', async () => {
+            const withdrawAmount = toNano('100');
+
+            await setupRevShareMode({});
+
+            for (let i = 0; i < 4; i++) {
+                await runVdAction(validators[0]);
+                let profit = toNano('1000') * BigInt(i + 1);
+                await nextRound(profit);
+                await pool.sendTouch(deployer.getSender());
+                roundId++;
+            }
+
+            const withdrawAddr = depositors[0].address;
+
+            // Withdraw is burning pool jettons pTONs
+            const withdrawJetton = bc.openContract(DAOWallet.createFromAddress(
+                await poolJetton.getWalletAddress(withdrawAddr)
+            ));
+            const poolBefore = await pool.getFullData();
+
+            const res = await withdrawJetton.sendBurnWithParams(depositors[0].getSender(), toNano('1.05'),
+                withdrawAmount,
+                withdrawAddr, false, false);
+            const poolAfter = await pool.getFullData();
+            // Shold burn successfully
+            expect(res.transactions).toHaveTransaction({
+                from: withdrawJetton.address,
+                to: poolJetton.address,
+                body: (x) => testJettonBurnNotification(x!, {
+                    amount: withdrawAmount
+                }),
+                success: true
+            });
+
+            // Withdraw request reached pool
+            const reqTx = findTransaction(res.transactions, {
+                from: poolJetton.address,
+                to: pool.address,
+                op: Op.pool.withdraw,
+                outMessagesCount: (x) => x! >= 1
+            })!;
+            expect(reqTx).not.toBeUndefined();
+
+            const inMsg = reqTx.inMessage!;
+            if(inMsg.info.type !== "internal")
+                throw(Error("Internal expected"));
+
+            // Formula from `pool::withdraw` from Pool contract
+            const inValue       = inMsg.info.value.coins;
+            const approxTotalBalanceBefore = poolBefore.totalBalance * 10000000n / (10000000n + poolBefore.currentRound.profitRatePrev2);
+            const tonAmount = withdrawAmount * approxTotalBalanceBefore / poolBefore.supply;
+
+            let withdrawFee = 0n;
+            if(poolBefore.instantWithdrawalFee > 0n) {
+                const base = Conf.shareBase;
+                // Just in case
+                expect(poolAfter.instantWithdrawalFee).toEqual(poolBefore.instantWithdrawalFee);
+                withdrawFee = tonAmount * BigInt(poolAfter.instantWithdrawalFee) / base;
+                expect(poolAfter.accruedGovernanceFee).toEqual(poolBefore.accruedGovernanceFee + withdrawFee);
+            }
+            expect(res.transactions).toHaveTransaction({
+                from: pool.address,
+                to: withdrawAddr,
+                op: Op.pool.withdrawal,
+                value: tonAmount + inValue - bcConf.lumpPrice - computedGeneric(reqTx).gasFees - withdrawFee
+            });
+            expect(poolAfter.totalBalance).toEqual(poolBefore.totalBalance - tonAmount);
+            expect(poolAfter.supply).toEqual(poolBefore.supply - withdrawAmount);
+        });
+
         /*WIP
         it('Pessimistic', async() => {
             await loadSnapshot('long_initial');
@@ -2381,7 +2464,7 @@ describe('Integrational tests', () => {
             const creditTx = await executeTill(txInterator, {
                 from: controller.address,
                 to: pool.address,
-                op: Op.pool.request_loan,
+                op: Op.pool.request_loan2,
                 success: true
             });
             // Make sure pool data changed accordingly

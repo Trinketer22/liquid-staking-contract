@@ -15,8 +15,7 @@ export type ControllerConfig = {
 
 export type ApproveOptions = {
     startPriorElectionsEnd: number,
-    allocation: bigint,
-    profitShare: number
+    allocation: bigint
 };
 
 export function controllerConfigToCell(config: ControllerConfig): Cell {
@@ -166,7 +165,6 @@ export class Controller implements Contract {
                 .storeUint(query_id, 64)
                 .storeUint(opts.startPriorElectionsEnd, 48)
                 .storeCoins(opts.allocation)
-                .storeUint(opts.profitShare, 24)
                .endCell();
     }
 

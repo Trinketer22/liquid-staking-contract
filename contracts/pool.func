@@ -16,8 +16,8 @@ global int state; ;; Currently pool can only be in NORMAL state. This variable r
 global int halted?;
 global int total_balance;
 global int interest_rate; ;; times SHARE_BASIS == 2**24
-;; optimistic_deposit_withdrawals, deposits_open?, instant_withdrawal_fee (time SHARE_BASIS)
-global [int, int, int] deposit_withdrawal_parameters;
+;; optimistic_deposit_withdrawals, deposits_open?, instant_withdrawal_fee (time SHARE_BASIS), rev_share
+global [int, int, int, int] deposit_withdrawal_parameters;
 global int saved_validator_set_hash;
 
 ;; [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit, profit_rate_prev2]
@@ -108,6 +108,7 @@ const int GOVERNOR_QUARANTINE = 86400; ;; 1 day
 slice _get_controller_address (int controller_id, slice validator) method_id;
 (slice, cell) build_controller_address(int controller_id, slice validator);
 
+forall E1, E2, E3, E4, E5, E6, E7, E8 -> E8 profit_rate_prev2_from_round_data([E1, E2, E3, E4, E5, E6, E7, E8] p) asm "7 INDEX";
 forall X, Y -> Y round_id_from_round_data(X p) asm "SECOND";
 int current_round_index() inline {
     ;;var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit] = current_round_borrowers;
@@ -207,10 +208,31 @@ int muldiv_extra(int a, int b, int c) inline {
             in_msg_body.end_parse();
             update_round(pair_first(get_balance()) - msg_value);
             assert_not_halted!(); ;; otherwise mint back
-            int approximate_amount = muldiv(jetton_amount, total_balance, supply);
+
             int available_funds = balance - msg_value - MIN_TONS_FOR_STORAGE - sent_during_rotation;
             [int optimistic_deposit_withdrawals,
-             _, int instant_withdrawal_fee] = deposit_withdrawal_parameters;
+             _, int instant_withdrawal_fee, int rev_share] = deposit_withdrawal_parameters;
+
+            int approximate_amount = 0;
+            if (rev_share == 0) {
+                approximate_amount = muldiv(jetton_amount, total_balance, supply);
+            } else {
+                ;; While this is not a perfect derivation, we lack of information about supply and total_balance
+                ;; from previous round, so this should calculate previous round exchange rate.
+                ;; This is not a real total_balance from prev round and is used only as part of
+                ;; the exchange rate calculation.
+                int total_balance_prev_round = muldiv(
+                    total_balance,
+                    10000000,
+                    10000000 + profit_rate_prev2_from_round_data(current_round_borrowers)
+                );
+
+                int output_with_current_rate = muldiv(jetton_amount, total_balance, supply);
+                int output_with_prev_rate = muldiv(jetton_amount, total_balance_prev_round, supply);
+
+                approximate_amount = min(output_with_current_rate, output_with_prev_rate);
+            }
+
             if(optimistic_deposit_withdrawals &
                     request_immediate_withdrawal_if_possible &
                     (state == state::NORMAL) &
@@ -314,9 +336,17 @@ int muldiv_extra(int a, int b, int c) inline {
                 int optimistic_deposit_withdrawals = in_msg_body~load_bool();
                 int deposits_open?  = in_msg_body~load_bool();
                 int instant_withdrawal_fee = in_msg_body~load_share();
+                int rev_share = in_msg_body~load_share();
+                if (rev_share > 0) {
+                    throw_unless(error::no_profit_rate_available,
+                        (profit_rate_prev2_from_round_data(prev_round_borrowers) != 0) &
+                        (profit_rate_prev2_from_round_data(current_round_borrowers) != 0)
+                    );
+                }
                 deposit_withdrawal_parameters = [optimistic_deposit_withdrawals,
                                                  deposits_open?,
-                                                 instant_withdrawal_fee];
+                                                 instant_withdrawal_fee,
+                                                 rev_share];
                 in_msg_body.end_parse();
     } elseif(op == governor::set_governance_fee) {
                 assert_sender!(sender_address, get_governor(roles));
@@ -345,7 +375,8 @@ int muldiv_extra(int a, int b, int c) inline {
         in_msg_body.end_parse();
         [int optimistic_deposit_withdrawals,
          int deposits_open?,
-         int instant_withdrawal_fee] = deposit_withdrawal_parameters;
+         int instant_withdrawal_fee,
+         int rev_share] = deposit_withdrawal_parameters;
         if (stop_optimistic) {
             optimistic_deposit_withdrawals = false;
         }
@@ -354,7 +385,8 @@ int muldiv_extra(int a, int b, int c) inline {
         }
         deposit_withdrawal_parameters = [optimistic_deposit_withdrawals,
                                          deposits_open?,
-                                         instant_withdrawal_fee];
+                                         instant_withdrawal_fee,
+                                         rev_share];
     } else {
         update_round(pair_first(get_balance()) - msg_value);
         assert_not_halted!();
@@ -366,7 +398,8 @@ int muldiv_extra(int a, int b, int c) inline {
                 assert_state!(state::NORMAL);
                 [int optimistic_deposit_withdrawals,
                  int deposits_open?,
-                 int instant_withdrawal_fee
+                 int instant_withdrawal_fee,
+                 int rev_share
                 ] = deposit_withdrawal_parameters;
                 throw_unless(error::deposits_are_closed, deposits_open?);
                 raw_reserve(balance - DEPOSIT_FEE - sent_during_rotation, reservemode::STRICT);
@@ -384,7 +417,7 @@ int muldiv_extra(int a, int b, int c) inline {
                     request_to_mint_deposit(sender_address, deposit_amount, query_id);
                 }
                 return save_data_optimised();
-        } elseif (op == pool::request_loan) {
+        } elseif ((op == pool::request_loan) | (op == pool::request_loan2)) {
 
               assert_state!(state::NORMAL);
               throw_if(error::borrowing_request_in_closed_round, current_round_closed?);
@@ -404,7 +437,6 @@ int muldiv_extra(int a, int b, int c) inline {
               ;; the rest of in_msg_body is currently unused static data
 
               assert_sender!(sender_address, _get_controller_address(controller_id, validator));
-              throw_unless(error::interest_too_low, max_interest >= interest_rate);
 
               ;; maybe too harsh conditions
               int creditable_funds = balance
@@ -425,15 +457,39 @@ int muldiv_extra(int a, int b, int c) inline {
 
               throw_unless(error::not_enough_funds_for_loan, actual_loan >=  min_loan);
 
-              int interest = muldiv(actual_loan, interest_rate, SHARE_BASIS);
-              builder msg = begin_cell()
-                        .store_msg_flags(msgflag::BOUNCEABLE)
-                        .store_slice(sender_address)
-                        .store_coins(actual_loan)
-                        .store_msgbody_prefix_slice()
-                        .store_body_header(controller::credit, query_id)
-                        .store_coins(actual_loan + interest);
-              send_raw_message(msg.end_cell(), sendmode::REGULAR);
+              int interest = 0;
+              [_, _, _, int rev_share] = deposit_withdrawal_parameters;
+              if (rev_share) {
+                  if (op != pool::request_loan2) {
+                      ;; We cannot process request from controller with old logic
+                      throw(error::unknown_op);
+                  }
+
+                  ;; if rev_share is set, we are interpreting max_interest as max_rev_share
+                  int max_rev_share = max_interest;
+                  throw_unless(error::interest_too_low, max_rev_share >= rev_share);
+
+                  builder msg = begin_cell()
+                      .store_msg_flags(msgflag::BOUNCEABLE)
+                      .store_slice(sender_address)
+                      .store_coins(actual_loan)
+                      .store_msgbody_prefix_slice()
+                      .store_body_header(controller::credit, query_id)
+                      .store_coins(actual_loan)
+                      .store_share(rev_share);
+                  send_raw_message(msg.end_cell(), sendmode::REGULAR);
+              } else {
+                  throw_unless(error::interest_too_low, max_interest >= interest_rate);
+                  interest = muldiv(actual_loan, interest_rate, SHARE_BASIS);
+                  builder msg = begin_cell()
+                      .store_msg_flags(msgflag::BOUNCEABLE)
+                      .store_slice(sender_address)
+                      .store_coins(actual_loan)
+                      .store_msgbody_prefix_slice()
+                      .store_body_header(controller::credit, query_id)
+                      .store_coins(actual_loan + interest);
+                  send_raw_message(msg.end_cell(), sendmode::REGULAR);
+              }
 
               log_loan(sender_address, actual_loan);
               int total_loan = current_round_borrowers~add_loan(sender_address, actual_loan, interest);
@@ -730,10 +786,15 @@ int muldiv_extra(int a, int b, int c) inline {
 
 (int, int) _get_projected_conversion_ratio () inline {
     var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit, profit_rate_prev2] = prev_round_borrowers;
+    [_, _, _, int rev_share] = deposit_withdrawal_parameters;
     int expected_profit = expected - borrowed - FINALIZE_ROUND_FEE;
     int fee = max(muldiv(governance_fee_share, expected_profit, SHARE_BASIS), 0);
     expected_profit -= fee;
-    return (max(total_balance + expected_profit, 0), supply);
+    ifnot (rev_share) {
+        return (max(total_balance + expected_profit, 0), supply);
+    } else {
+        return (max(total_balance - fee, 0), supply);
+    }
 }
 
 
@@ -776,7 +837,7 @@ var compose_pool_full_data_internal( int update?) inline_ref {
         update_round(pair_first(get_balance()));
     }
     [int optimistic_deposit_withdrawals, int deposits_open?,
-     int instant_withdrawal_fee] = deposit_withdrawal_parameters;
+     int instant_withdrawal_fee, int rev_share] = deposit_withdrawal_parameters;
 
     [slice sudoer, int sudoer_set_at,
      slice governor, int governor_update_after,
@@ -785,7 +846,7 @@ var compose_pool_full_data_internal( int update?) inline_ref {
             total_balance,
             interest_rate,
             optimistic_deposit_withdrawals, deposits_open?,
-            instant_withdrawal_fee,
+            instant_withdrawal_fee, rev_share,
             saved_validator_set_hash,
 
             prev_round_borrowers, current_round_borrowers,

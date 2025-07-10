@@ -558,7 +558,7 @@ describe('Governor actions tests', () => {
                         to: pool.address,
                         value: toNano('1'),
                         body: beginCell()
-                                .storeUint(Op.pool.request_loan, 32)
+                                .storeUint(Op.pool.request_loan2, 32)
                                 .storeUint(1, 64)
                                 .storeCoins(toNano('100000'))
                                 .storeCoins(toNano('100000'))
