@@ -10,7 +10,7 @@
                 ds~load_coins(),            ;; expected
                 ds~load_coins(),            ;; returned
                 ds~load_signed_coins(),
-                ds.slice_empty?() ? 0 : ds~load_uint(64)];    ;; profit
+                ds.slice_empty?() ? 0 : ds~load_int(64)];    ;; profit
    return (s, (data));
 }
 
@@ -24,7 +24,7 @@ builder store_round_data(builder b, [cell, int, int, int, int, int, int, int] ro
                      .store_coins(expected)
                      .store_coins(returned)
                      .store_signed_coins(profit)
-                     .store_uint(profit_rate_prev2, 64)
+                     .store_int(profit_rate_prev2, 64)
                      .end_cell();
   return b.store_ref(serialized);
 }
