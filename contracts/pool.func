@@ -472,7 +472,7 @@ int muldiv_extra(int a, int b, int c) inline {
                       .store_body_header(controller::credit, query_id)
                       .store_coins(actual_loan)
                       .store_share(rev_share);
-                  send_raw_message(msg.end_cell(), sendmode::REGULAR);
+                  send_raw_message(msg.end_cell(), sendmode::PAY_FEES_SEPARATELY);
               } else {
                   throw_unless(error::interest_too_low, max_interest >= interest_rate);
                   interest = muldiv(actual_loan, interest_rate, SHARE_BASIS);
