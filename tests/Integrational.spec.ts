@@ -723,14 +723,14 @@ describe('Integrational tests', () => {
                                totalBalance: bigint,
                                depositMinter: Address | null,
                                withdrawMinter: Address | null,
-                               profitRatePrev2?: bigint,) => {
+                               withdrawRatePrev2X24?: bigint,) => {
             let fee        = 0n;
             let sentDuring = Conf.serviceNotificationAmount;
             const profit   = returned - borrowed - Conf.finalizeRoundFee;
             const curBalance = totalBalance + profit;
-            if(profitRatePrev2 !== undefined) {
-                const expectedProfitRatePrev2 = (returned - borrowed) * 10000000n / borrowed;
-                expect(expectedProfitRatePrev2).toEqual(profitRatePrev2);
+            if(withdrawRatePrev2X24 !== undefined) {
+                const expectedWithdrawRatePrev2X24 = totalBalance * Conf.shareBase / supply;
+                expect(expectedWithdrawRatePrev2X24).toEqual(withdrawRatePrev2X24);
             }
             if(profit > 0) {
                 fee = Conf.governanceFee * profit / Conf.shareBase;
@@ -1498,7 +1498,7 @@ describe('Integrational tests', () => {
                     dataBefore.totalBalance,
                     null,
                     null,
-                    dataAfter.currentRound.profitRatePrev2)
+                    dataAfter.currentRound.withdrawRatePrev2X24)
 
 
         expect(await pool.getLoan(0, validator.wallet.address, true)).toEqual({
@@ -2233,8 +2233,8 @@ describe('Integrational tests', () => {
             await setupRevShareMode({});
 
             let dataAfter = await pool.getFullData();
-            expect(dataAfter.previousRound.profitRatePrev2).toEqual(15258n);
-            expect(dataAfter.currentRound.profitRatePrev2).toEqual(15258n);
+            expect(dataAfter.previousRound.withdrawRatePrev2X24).toEqual(16780870n);
+            expect(dataAfter.currentRound.withdrawRatePrev2X24).toEqual(16784693n);
             expect(dataAfter.revShare).toEqual(REV_SHARE);
         });
 
@@ -2250,8 +2250,8 @@ describe('Integrational tests', () => {
             }
 
             let dataAfter = await pool.getFullData();
-            expect(dataAfter.previousRound.profitRatePrev2).toEqual(25381n);
-            expect(dataAfter.currentRound.profitRatePrev2).toEqual(26377n);
+            expect(dataAfter.previousRound.withdrawRatePrev2X24).toEqual(16796160n);
+            expect(dataAfter.currentRound.withdrawRatePrev2X24).toEqual(16802524n);
             expect(dataAfter.revShare).toEqual(REV_SHARE);
         });
 
@@ -2305,8 +2305,7 @@ describe('Integrational tests', () => {
 
             // Formula from `pool::withdraw` from Pool contract
             const inValue       = inMsg.info.value.coins;
-            const approxTotalBalanceBefore = poolBefore.totalBalance * 10000000n / (10000000n + poolBefore.currentRound.profitRatePrev2);
-            const tonAmount = withdrawAmount * approxTotalBalanceBefore / poolBefore.supply;
+            const tonAmount = withdrawAmount * Conf.shareBase / poolBefore.currentRound.withdrawRatePrev2X24;
 
             let withdrawFee = 0n;
             if(poolBefore.instantWithdrawalFee > 0n) {

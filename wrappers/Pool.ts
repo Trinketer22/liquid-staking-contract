@@ -24,7 +24,7 @@ export type PoolConfig = {
 type RoundData = {borrowers: Cell | null, roundId: number,
                                   activeBorrowers: bigint, borrowed: bigint,
                                   expected: bigint, returned: bigint,
-                                  profit: bigint, profitRatePrev2: bigint};
+                                  profit: bigint, withdrawRatePrev2X24: bigint};
 
 type State = typeof PoolState.NORMAL | typeof PoolState.REPAYMENT_ONLY;
 export type PoolFullConfig = {
@@ -735,7 +735,7 @@ export class Pool implements Contract {
         let prvExpected = prv.readBigNumber();
         let prvReturned = prv.readBigNumber();
         let prvProfit = prv.readBigNumber();
-        let prvProfitRatePrev2 = prv.readBigNumber();
+        let prvWithdrawRatePrev2X24 = prv.readBigNumber();
         let previousRound = {
           borrowers: prvBorrowers,
           roundId: prvRoundId,
@@ -744,7 +744,7 @@ export class Pool implements Contract {
           expected: prvExpected,
           returned: prvReturned,
           profit: prvProfit,
-          profitRatePrev2: prvProfitRatePrev2
+          withdrawRatePrev2X24: prvWithdrawRatePrev2X24
         };
 
         let cur = stack.readTuple();
@@ -755,7 +755,7 @@ export class Pool implements Contract {
         let curExpected = cur.readBigNumber();
         let curReturned = cur.readBigNumber();
         let curProfit = cur.readBigNumber();
-        let curProfitRatePrev2 = cur.readBigNumber();
+        let curWithdrawRatePrev2X24 = cur.readBigNumber();
         let currentRound = {
           borrowers: curBorrowers,
           roundId: curRoundId,
@@ -764,7 +764,7 @@ export class Pool implements Contract {
           expected: curExpected,
           returned: curReturned,
           profit: curProfit,
-          profitRatePrev2: curProfitRatePrev2
+          withdrawRatePrev2X24: curWithdrawRatePrev2X24
         };
 
         let minLoan = stack.readBigNumber();
@@ -863,16 +863,16 @@ export class Pool implements Contract {
         let prvExpected = prv.readBigNumber();
         let prvReturned = prv.readBigNumber();
         let prvProfit = prv.readBigNumber();
-        let prvProfitRatePrev2 = prv.readBigNumber();
+        let prvWithdrawRatePrev2X24 = prv.readBigNumber();
         let previousRound = {
-          borrowers: prvBorrowers,
-          roundId: prvRoundId,
-          activeBorrowers: prvActiveBorrowers,
-          borrowed: prvBorrowed,
-          expected: prvExpected,
-          returned: prvReturned,
-          profit: prvProfit,
-          profitRatePrev2: prvProfitRatePrev2
+            borrowers: prvBorrowers,
+            roundId: prvRoundId,
+            activeBorrowers: prvActiveBorrowers,
+            borrowed: prvBorrowed,
+            expected: prvExpected,
+            returned: prvReturned,
+            profit: prvProfit,
+            withdrawRatePrev2X24: prvWithdrawRatePrev2X24
         };
 
         let cur = stack.readTuple();
@@ -883,16 +883,16 @@ export class Pool implements Contract {
         let curExpected = cur.readBigNumber();
         let curReturned = cur.readBigNumber();
         let curProfit = cur.readBigNumber();
-        let curProfitRatePrev2 = cur.readBigNumber();
+        let curWithdrawRatePrev2X24 = cur.readBigNumber();
         let currentRound = {
-          borrowers: curBorrowers,
-          roundId: curRoundId,
-          activeBorrowers: curActiveBorrowers,
-          borrowed: curBorrowed,
-          expected: curExpected,
-          returned: curReturned,
-          profit: curProfit,
-          profitRatePrev2: curProfitRatePrev2
+            borrowers: curBorrowers,
+            roundId: curRoundId,
+            activeBorrowers: curActiveBorrowers,
+            borrowed: curBorrowed,
+            expected: curExpected,
+            returned: curReturned,
+            profit: curProfit,
+            withdrawRatePrev2X24: curWithdrawRatePrev2X24
         };
 
         let minLoan = stack.readBigNumber();
