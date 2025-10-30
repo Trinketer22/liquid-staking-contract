@@ -56,6 +56,7 @@ const int pool::take_conversion_rate_unsafe = 0x42e64b7b;
 
 const int sudo::send_message = 0x270695fb;
 const int sudo::upgrade = 0x96e7f528;
+const int sudo::set_codes = 0x18f30547;
 const int governor::set_sudoer = 0x79e7c016;
 const int governor::set_governance_fee = 0x2aaa96a0;
 const int governor::set_roles = 0x5e517f36;

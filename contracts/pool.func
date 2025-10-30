@@ -280,7 +280,17 @@ int muldiv_extra(int a, int b, int c) inline {
                               get_sudoer(roles), get_sudoer_set_at(roles));
     } elseif (op == sudo::upgrade) {
         process_sudo_upgrade_request(sender_address, in_msg_body,
-                                     get_sudoer(roles), get_sudoer_set_at(roles));
+            get_sudoer(roles), get_sudoer_set_at(roles));
+    } elseif (op == sudo::set_codes) {
+        assert_sender!(sender_address, get_sudoer(roles));
+        throw_unless(sudoer::quarantine, now() > get_sudoer_set_at(roles) + SUDOER_QUARANTINE);
+
+        var codes = in_msg_body~load_ref().begin_parse();
+        child_contract_codes = [
+            codes~load_ref(),
+            codes~load_ref(),
+            codes~load_ref()
+        ];
     } elseif (op == governor::set_sudoer) {
                 assert_sender!(sender_address, get_governor(roles));
                 set_sudoer_set_at(now());
