@@ -215,7 +215,7 @@ int muldiv_extra(int a, int b, int c) inline {
                 int output_with_current_rate = muldiv(jetton_amount, total_balance, supply);
 
                 int previous_withdrawal_rate_x24 = withdrawal_rate_prev2_x24_from_round_data(current_round_borrowers);
-                int output_with_prev_rate = muldiv(jetton_amount, SHARE_BASIS, previous_withdrawal_rate_x24);
+                int output_with_prev_rate = muldiv(jetton_amount, previous_withdrawal_rate_x24, SHARE_BASIS);
 
                 approximate_amount = min(output_with_current_rate, output_with_prev_rate);
             }

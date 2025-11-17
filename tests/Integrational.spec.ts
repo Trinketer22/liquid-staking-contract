@@ -2305,7 +2305,7 @@ describe('Integrational tests', () => {
 
             // Formula from `pool::withdraw` from Pool contract
             const inValue       = inMsg.info.value.coins;
-            const tonAmount = withdrawAmount * Conf.shareBase / poolBefore.currentRound.withdrawRatePrev2X24;
+            const tonAmount = withdrawAmount * poolBefore.currentRound.withdrawRatePrev2X24 / Conf.shareBase;
 
             let withdrawFee = 0n;
             if(poolBefore.instantWithdrawalFee > 0n) {
