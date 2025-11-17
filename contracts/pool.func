@@ -648,9 +648,9 @@ int muldiv_extra(int a, int b, int c) inline {
     throw_unless(error::finalizing_active_credit_round, borrowers_dict.null?());
     throw_unless(error::finalizing_active_credit_round, active_borrowers == 0);
 
-    ;; pool initializes with returned = borrowed = 0, set withdrawal_rate_prev2_x24 = 0 in this case
+    ;; pool initializes with supply = 0, set withdrawal_rate_prev2_x24 = 0 in this case
     var withdrawal_rate_prev2_x24 = 0;
-    if (borrowed != 0) {
+    if (supply != 0) {
         withdrawal_rate_prev2_x24 = muldiv(total_balance, SHARE_BASIS, supply);
     }
 
