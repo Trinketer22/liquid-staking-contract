@@ -24,7 +24,7 @@ import { setConsigliere } from "../wrappers/PayoutMinter.compile";
 import { Conf, ControllerState, Errors, Op } from "../PoolConstants";
 import { PayoutCollection, Conf as NFTConf, Op as NFTOp } from "../wrappers/PayoutNFTCollection";
 import { PayoutItem } from "../wrappers/PayoutNFTItem";
-import { testJettonTransfer, buff2bigint, computedGeneric, getRandomTon, testControllerMeta, getExternals, testLog, testLogRepayment, testMintMsg, assertLog, muldivExtra, testJettonNotification, filterTransaction, findTransaction, testJettonBurnNotification, approximatelyEqual, Txiterator, executeTill, differentAddress, executeFrom } from "../utils";
+import { testJettonTransfer, buff2bigint, computedGeneric, getRandomTon, testControllerMeta, getExternals, testLog, testLogRepayment, testMintMsg, assertLog, muldivExtra, testJettonNotification, filterTransaction, findTransaction, testJettonBurnNotification, approximatelyEqual, Txiterator, executeTill, differentAddress, executeFrom, topNBits } from "../utils";
 import { ElectorTest } from "../wrappers/ElectorTest";
 import { getElectionsConf, getStakeConf, getValidatorsConf, getVset, loadConfig, packStakeConf, packValidatorsConf } from "../wrappers/ValidatorUtils";
 import { ConfigTest } from "../wrappers/ConfigTest";
@@ -36,6 +36,14 @@ import { flattenTransaction } from "@ton/test-utils";
 type Validator = {
   wallet: SandboxContract<TreasuryContract>,
   keys: KeyPair
+};
+type ControllerActionResult = {
+    controller: SandboxContract<Controller>,
+    index: number,
+    profit: bigint,
+    returnedToPool: bigint,
+    controllerBefore: Awaited<ReturnType<Controller['getControllerData']>>
+    controllerAfter: Awaited<ReturnType<Controller['getControllerData']>>
 };
 type MintChunk = {
     address: Address,
@@ -2023,7 +2031,7 @@ describe('Integrational tests', () => {
         let depositors: SandboxContract<TreasuryContract>[];
         let accountForDepo: (depo: MintChunk | bigint, amount: bigint) => number;
         let runNmAction: (depositor: SandboxContract<TreasuryContract>) => Promise<void>;
-        let runVdAction: (validator: Validator) => Promise<void>;
+        let runVdAction: (validator: Validator) => Promise<ControllerActionResult[]>;
         let runVldActions: () => Promise<void>;
         beforeAll(async () => {
             await loadSnapshot('initial');
@@ -2149,25 +2157,62 @@ describe('Integrational tests', () => {
                 const myControllers = controllers.get(validator.wallet.address.toString())!;
                 const shouldAct = (roundId & 1);
                 const vSender   = validator.wallet.getSender();
+                const poolData  = await pool.getFullData();
                 // Announcing elections
+                let actionResults: ControllerActionResult[] = [];
+
                 for(let i = 0; i < nmPerValidator; i++) {
+                    let profit = 0n;
                     let actingController = myControllers[i];
                     const hashUpd = await actingController.sendUpdateHash(vSender);
                     if((i & 1) == shouldAct) {
                         //console.log(`Acting on ${i}`);
+
                         const controllerData = await actingController.getControllerData();
+                        let actionRes = {
+                            controller: actingController,
+                            controllerBefore: controllerData,
+                            index: i,
+                            returnedToPool: 0n,
+                            profit: 0n,
+                        }
+
                         if(controllerData.state == ControllerState.FUNDS_STAKEN) {
                             waitUnlock(hashUpd.transactions[1].now);
                             //console.log(`Recovering loan ${i}`);
                             await elector.sendTickTock("tick");
                             await elector.sendTickTock("tick");
                             const res = await actingController.sendRecoverStake(vSender);
-                            expect(res.transactions).toHaveTransaction({
+                            const returnTx = findTransaction(res.transactions, {
                                 from: elector.address,
                                 to: actingController.address,
                                 op: Op.elector.recover_stake_ok,
                                 value: (x) => x! >= sConf.min_stake
-                            });
+                            })!;
+                            expect(returnTx).not.toBeUndefined();
+                            const recoverMsg = returnTx.inMessage!;
+                            if(recoverMsg.info.type !== 'internal') {
+                                throw new Error("No way");
+                            }
+
+                            const repaymentTx = findTransaction(res.transactions, {
+                                on: pool.address,
+                                from: actingController.address,
+                                op: Op.pool.loan_repayment,
+                                aborted: false
+                                // value: controllerData.borrowedAmount + poolProfitShare
+                            })!;
+                            expect(repaymentTx).not.toBeUndefined();
+                            const repaymentMsg = repaymentTx.inMessage!;
+
+                            if(repaymentMsg.info.type !== 'internal') {
+                                throw new Error("No way");
+                            }
+
+                            // Controller profit
+                            profit = recoverMsg.info.value.coins - controllerData.stakeSent;
+                            actionRes.returnedToPool = repaymentMsg.info.value.coins;
+                            actionRes.profit = profit;
                         }
                         const curElect  = await announceElections();
                         //console.log(`Requesting loan ${i}`);
@@ -2184,8 +2229,10 @@ describe('Integrational tests', () => {
                         });
                         const controllerAfter = await actingController.getControllerData();
                         expect(controllerAfter.state).toEqual(ControllerState.FUNDS_STAKEN);
+                        actionResults.push({controllerAfter,...actionRes});
                     }
                 }
+                return actionResults;
             }
             snapStates.set('long_initial', bc.snapshot());
         });
@@ -2205,66 +2252,148 @@ describe('Integrational tests', () => {
         const SHARE_BASIS = 256 * 256 * 256;
         const REV_SHARE = SHARE_BASIS / 2; // 50%
 
+        function calculateRoundRate(amount: bigint, balance: bigint, supply: bigint) {
+            return amount * balance / supply;
+        }
+        function withdrawRateBased(balance: bigint, supply: bigint) {
+            return balance * BigInt(SHARE_BASIS) / supply;
+        }
+
         async function setupRevShareMode(opts: {
+            revShare?: number;
             profits?: bigint[]
         }) {
             await loadSnapshot('long_initial');
             const pollBefore = await pool.getFullData();
             expect(pollBefore.revShare).toEqual(0);
+            const revShare = opts.revShare ?? REV_SHARE;
 
             await Promise.all(depositors.map(async x => await pool.sendDeposit(x.getSender(), toNano('100000'))));
+
+            const prevRoundData = await pool.getFullData();
+
+
+            let prevBalance: {balance: bigint, supply: bigint} = {
+                balance: prevRoundData.totalBalance, supply: prevRoundData.supply
+            }
+
+            let roundLog: {balance: bigint, supply: bigint}[] = [prevBalance];
+
+            let startRoundId = prevRoundData.currentRound.roundId;
             for (let i = 0; i < 5; i++) {
                 await runVdAction(validators[0]);
                 let profit = opts.profits ? (opts.profits[i] == undefined ? toNano('100000') : opts.profits[i]) : toNano('100000');
                 await nextRound(profit);
+                // console.log(roundData.currentRound.borrowed)
+                // console.log(roundData.currentRound.roundId)
                 await pool.sendTouch(deployer.getSender());
+                const curRoundData = await pool.getFullDataRaw();
+                const curRoundRate = {
+                    balance: curRoundData.totalBalance,
+                    supply: curRoundData.supply
+                };
+
+                // After very first borrow, second elections round might not rotate
+                // 1) First vset controller 1 borrowed.
+                // 2) Second vset controller 2 borrowed, but it's too soon for controller 1 to return stake
+                // round will only close when controller 1 will return stake.
+                // And on the next round it will become normal
+                if(curRoundData.currentRound.roundId > startRoundId) {
+                    startRoundId = curRoundData.currentRound.roundId;
+                    roundLog.unshift(curRoundRate);
+                    // console.log(i);
+                    // console.log("prevPrev:", prevPrevBalance);
+                    // console.log("prev:", prevBalance);
+                    // console.log("curBalance:", curBalance);
+                    const prevRoundRate = roundLog[1];
+                    expect(curRoundData.currentRound.withdrawRatePrev2X24).toEqual(withdrawRateBased(prevRoundRate.balance, prevRoundRate.supply));
+                    if(roundLog.length > 2){
+                        const roundBeforePrev = roundLog[2];
+                        expect(curRoundData.previousRound.withdrawRatePrev2X24).toEqual(withdrawRateBased(roundBeforePrev.balance, roundBeforePrev.supply));
+                    }
+                }
                 roundId++;
             }
 
-            const res = await pool.sendSetDepositSettings(deployer.getSender(), toNano("0.3"), true, true, 0, REV_SHARE);
+            const res = await pool.sendSetDepositSettings(deployer.getSender(), toNano("0.3"), true, true, 0, revShare);
             expect(res.transactions).toHaveTransaction({
                 from: deployer.address,
                 to: pool.address,
                 success: true
             });
+            return {
+                prev: roundLog[2],
+                cur: roundLog[1]
+            }
         }
 
+
         it('should set rev share', async () => {
-            await setupRevShareMode({});
+            const rndProfitShare = getRandomInt(Math.ceil(SHARE_BASIS / 100), REV_SHARE)
+            const roundStats = await setupRevShareMode({revShare: rndProfitShare});
 
             let dataAfter = await pool.getFullData();
-            expect(dataAfter.previousRound.withdrawRatePrev2X24).toEqual(16780870n);
-            expect(dataAfter.currentRound.withdrawRatePrev2X24).toEqual(16784693n);
-            expect(dataAfter.revShare).toEqual(REV_SHARE);
+            expect(dataAfter.previousRound.withdrawRatePrev2X24).toEqual(withdrawRateBased(roundStats.prev.balance, roundStats.prev.supply));
+            expect(dataAfter.currentRound.withdrawRatePrev2X24).toEqual(withdrawRateBased(roundStats.cur.balance, roundStats.cur.supply));
+            expect(dataAfter.revShare).toEqual(rndProfitShare);
         });
 
         it('should calculate profit rate based on the rev_share', async () => {
-            await setupRevShareMode({});
+            const rndProfitShare = getRandomInt(Math.ceil(SHARE_BASIS / 100), REV_SHARE)
+            await setupRevShareMode({revShare: rndProfitShare});
 
+            let roundLog: {supply: bigint, balance: bigint}[] = [];
+
+            let revShareRoundCount = 0;
             for (let i = 0; i < 4; i++) {
-                await runVdAction(validators[0]);
+                const vdRes= (await runVdAction(validators[0]))[0];
+                // console.log(vdRes);
+                // Controller in staked state and profit share is set
+                if(vdRes.controllerBefore.state == 3 && vdRes.controllerBefore.approverSetProfitShare > 0n) {
+                    expect(vdRes.profit).toBeGreaterThan(0n);
+                    expect(vdRes.returnedToPool).toEqual(vdRes.controllerBefore.borrowedAmount + vdRes.profit * BigInt(rndProfitShare) / BigInt(SHARE_BASIS));
+                    revShareRoundCount++;
+                } else if(vdRes.controllerBefore.interest > 0){
+                    // Check that controller switches mode successfully
+                    expect(vdRes.controllerAfter?.interest).toBe(0);
+
+                    expect(vdRes.controllerAfter?.approverSetProfitShare).toBeGreaterThan(0n)
+                    expect(vdRes.controllerAfter?.interest).toBe(0);
+                }
                 let profit = toNano('1000') * BigInt(i + 1);
                 await nextRound(profit);
                 await pool.sendTouch(deployer.getSender());
+                const roundData = await pool.getFullData();
+                roundLog.unshift({supply: roundData.supply, balance: roundData.totalBalance});
                 roundId++;
             }
+            // 1 - First controller returns interest loan and takes revShare loan
+            // 2 - Second controller returns interest loan and takes revShare loan
+            // Theese two should return profit share
+            // 3 - First controller returns revShare loan and takes new one
+            // 4 - Second controller returns revShare loan and takes new one
+            expect(revShareRoundCount).toBe(2);
 
             let dataAfter = await pool.getFullData();
-            expect(dataAfter.previousRound.withdrawRatePrev2X24).toEqual(16796160n);
-            expect(dataAfter.currentRound.withdrawRatePrev2X24).toEqual(16802524n);
-            expect(dataAfter.revShare).toEqual(REV_SHARE);
+            expect(dataAfter.previousRound.withdrawRatePrev2X24).toEqual(withdrawRateBased(roundLog[2].balance, roundLog[2].supply));
+            expect(dataAfter.currentRound.withdrawRatePrev2X24).toEqual(withdrawRateBased(roundLog[1].balance, roundLog[1].supply));
+            expect(dataAfter.revShare).toEqual(rndProfitShare);
         });
 
         it('should instant withdraw with price from prev round', async () => {
-            const withdrawAmount = toNano('100');
+            const withdrawAmount = toNano(getRandomInt(10, 100));
 
             await setupRevShareMode({});
+
+            let roundLog: {supply: bigint, balance: bigint}[] = [];
 
             for (let i = 0; i < 4; i++) {
                 await runVdAction(validators[0]);
                 let profit = toNano('1000') * BigInt(i + 1);
                 await nextRound(profit);
                 await pool.sendTouch(deployer.getSender());
+                const roundData = await pool.getFullData();
+                roundLog.unshift({supply: roundData.supply, balance: roundData.totalBalance});
                 roundId++;
             }
 
@@ -2305,7 +2434,22 @@ describe('Integrational tests', () => {
 
             // Formula from `pool::withdraw` from Pool contract
             const inValue       = inMsg.info.value.coins;
+            // Exact value by formula from code
             const tonAmount = withdrawAmount * poolBefore.currentRound.withdrawRatePrev2X24 / Conf.shareBase;
+            const curRoundRate  = withdrawAmount * roundLog[0].balance / roundLog[0].supply;
+
+            // Self test just in case
+            expect(roundLog[0].supply).toEqual(poolBefore.supply);
+            expect(roundLog[0].balance).toEqual(poolBefore.totalBalance);
+
+            // But the formula result should match previous round rate up to 23 bits
+            const prevRoundRate = withdrawAmount * roundLog[1].balance / roundLog[1].supply;
+            expect(prevRoundRate).toBeLessThan(curRoundRate);
+            // Should be less than current round rate
+            expect(tonAmount).toBeLessThan(curRoundRate);
+            expect(tonAmount).toBeLessThanOrEqual(prevRoundRate);
+            // 24 bit fixed point has 23 bit effective mantissa
+            expect(topNBits(tonAmount, 23)).toEqual(topNBits(prevRoundRate, 23));
 
             let withdrawFee = 0n;
             if(poolBefore.instantWithdrawalFee > 0n) {
