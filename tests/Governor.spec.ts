@@ -1,6 +1,6 @@
 import { Blockchain, BlockchainSnapshot, BlockchainTransaction, internal, SandboxContract, TreasuryContract } from '@ton/sandbox';
 import { Address, Cell, toNano, Dictionary, beginCell, Sender, SendMode, Slice, Transaction } from '@ton/core';
-import { Pool } from '../wrappers/Pool';
+import { Pool, PoolChildCodes } from '../wrappers/Pool';
 import { Controller } from '../wrappers/Controller';
 import { JettonMinter as DAOJettonMinter, jettonContentToCell } from '../contracts/jetton_dao/wrappers/JettonMinter';
 import { JettonWallet as PoolJettonWallet } from '../wrappers/JettonWallet';
@@ -164,10 +164,18 @@ describe('Governor actions tests', () => {
             const mockCell = beginCell().storeUint(Date.now(), 256).endCell();
             // Intended to check availability only. State should be preserved
             const prevState = bc.snapshot();
-            let   res     = await pool.sendSudoMsg(via, 0, testMsg);
-            assertExitCode(res.transactions, exp_code);
-            res = await pool.sendUpgrade(via, mockCell, mockCell, mockCell);
-            assertExitCode(res.transactions, exp_code);
+            let testSendMsg = async () => await pool.sendSudoMsg(via, 0, testMsg);
+            let testSendUpgrade = async () =>  await pool.sendUpgrade(via, mockCell, mockCell, mockCell);
+            let testSendSetCodes = async () => await pool.sendSetCodes(via, {
+                controller: mockCell,
+                jetton_wallet: mockCell,
+                payout_minter: mockCell
+            });
+            for(let testCase of [testSendMsg, testSendUpgrade, testSendSetCodes]) {
+                const res = await testCase();
+                assertExitCode(res.transactions, exp_code);
+            }
+
             await bc.loadFrom(prevState);
         }
     });
@@ -732,6 +740,33 @@ describe('Governor actions tests', () => {
           to: testAddr,
           op: 1337
         });
+        await bc.loadFrom(prevState);
+    });
+    it('Sodoer should be able to set childCodes', async () => {
+        const prevState  = bc.snapshot();
+        const newChildCodes: PoolChildCodes = {
+            controller: beginCell().storeStringTail("Hop").endCell(),
+            jetton_wallet: beginCell().storeStringTail("Hey").endCell(),
+            payout_minter: beginCell().storeStringTail("La la ley").endCell()
+        }
+
+        const dataBefore = await pool.getFullData();
+        expect(dataBefore.controllerCode).not.toEqualCell(newChildCodes.controller);
+        expect(dataBefore.jettonWalletCode).not.toEqualCell(newChildCodes.jetton_wallet);
+        expect(dataBefore.payoutMinterCode).not.toEqualCell(newChildCodes.payout_minter);
+
+        const res = await pool.sendSetCodes(deployer.getSender(), newChildCodes);
+
+        expect(res.transactions).toHaveTransaction({
+                on: pool.address,
+                op: Op.sudo.set_codes,
+                aborted: false
+        });
+        const dataAfter = await pool.getFullData();
+        expect(dataAfter.controllerCode).toEqualCell(newChildCodes.controller);
+        expect(dataAfter.jettonWalletCode).toEqualCell(newChildCodes.jetton_wallet);
+        expect(dataAfter.payoutMinterCode).toEqualCell(newChildCodes.payout_minter);
+
         await bc.loadFrom(prevState);
     });
     it('Upgrade should not impact code/data when if not specified', async() => {
