@@ -77,7 +77,8 @@ export abstract class Op {
     }
     static readonly sudo = {
         send_message : 0x270695fb,
-        upgrade : 0x96e7f528
+        upgrade : 0x96e7f528,
+        set_codes: 0x18f30547
     }
     static readonly halter = {
         halt : 0x139a1b4e,

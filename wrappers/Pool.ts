@@ -67,6 +67,11 @@ export type PoolFullConfig = {
   pool_jetton_wallet_code: Cell;
   payout_minter_code: Cell;
 };
+export type PoolChildCodes = {
+    controller: Cell,
+    jetton_wallet: Cell,
+    payout_minter: Cell
+}
 
 export type PoolData = Awaited<ReturnType<InstanceType<typeof Pool>['getFullData']>>;
 
@@ -636,6 +641,26 @@ export class Pool implements Contract {
                      .storeMaybeRef(code)
                      .storeMaybeRef(afterUpgrade)
                   .endCell(),
+        });
+    }
+    static sudoSetCodesMessage(codes: PoolChildCodes, query_id: bigint | number = 0) {
+        const codesCell = beginCell()
+                            .storeRef(codes.controller)
+                            .storeRef(codes.jetton_wallet)
+                            .storeRef(codes.payout_minter)
+                         .endCell();
+        return beginCell()
+                .storeUint(Op.sudo.set_codes, 32)
+                .storeUint(query_id, 64)
+                .storeRef(codesCell)
+              .endCell();
+    }
+
+    async sendSetCodes(provider: ContractProvider, via: Sender, codes: PoolChildCodes, value: bigint = toNano('0.05'), query_id: bigint | number = 0) {
+        await provider.internal(via, {
+            value,
+            sendMode: SendMode.PAY_GAS_SEPARATELY,
+            body: Pool.sudoSetCodesMessage(codes, query_id)
         });
     }
 
