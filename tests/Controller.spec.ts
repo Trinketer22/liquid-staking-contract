@@ -571,7 +571,25 @@ describe('Cotroller mock', () => {
         expect(dataAfter.interest).toEqual(interest);
         snapStates.set('borrowing_req', bc.snapshot());
       });
+      it('Shoul be able to request loan with rev_share', async () => {
+          await bc.loadFrom(reqReady);
+          const testProfitShare = getRandomInt(Number(Conf.shareBase / 100n), Number(Conf.shareBase / 2n));
+          const dataBefore = await controller.getControllerData();
+          expect(dataBefore.acceptableProfitShare).toBe(0);
+          const res = await controller.sendRequestLoan(validator.wallet.getSender(),
+                                                   toNano('100000'),
+                                                   toNano('200000'),
+                                                   0,
+                                                   testProfitShare);
+          expect(res.transactions).toHaveTransaction({
+                  on: controller.address,
+                  from: validator.wallet.address,
+                  op: Op.controller.send_request_loan,
+                  aborted: false
+          });
 
+          expect((await controller.getControllerData()).acceptableProfitShare).toEqual(testProfitShare);
+      });
       it('Only validator can request loan', async () => {
         const interest = Math.floor(0.05 * Number(Conf.shareBase));
         await testRequestLoan(Errors.wrong_sender,
