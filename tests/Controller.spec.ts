@@ -193,7 +193,7 @@ describe('Cotroller mock', () => {
 
           const stateBefore = await getControllerState();
 
-          console.log((await bc.getContract(controller.address)).balance);
+          // console.log((await bc.getContract(controller.address)).balance);
           const res = await controller.sendRequestLoan(via, min_loan, max_loan, interest);
           expect(res.transactions).toHaveTransaction({
             from: via.address!,
@@ -850,16 +850,35 @@ describe('Cotroller mock', () => {
         await bc.loadFrom(reqReady);
 
         let   maxLoan = toNano('200000');
+        /* Problem here is not the amouns, it's that after interest has been removed from the loan cost estimation,
+         * There is no more loan proportional reserve requirement for controller
+         * Without Config parameter 40 only required reserve is storage + 101 TON
+         * Therefore let's take proportional punishment config from test above
+         * It will add proportilnal component back
+        */
+
+        const confDict = loadConfig(bc.config);
+        confDict.set(40, beginCell()
+                         .storeUint(1, 8) //prefix
+                         .storeCoins(toNano('101')) //Default flat fine
+                         .storeUint(2 ** 8, 32) // 1/4 of the stake
+                         .storeUint(256, 16)
+                         .storeUint(256, 16)
+                         .storeUint(0, 16)
+                         .storeUint(0, 16)
+                         .storeUint(256, 16)
+                         .storeUint(256, 16)
+                        .endCell());
+        bc.setConfig(beginCell().storeDictDirect(confDict).endCell());
 
         const controllerSmc  = await bc.getContract(controller.address);
-        let   balanceForLoan = await controller.getBalanceForLoan(maxLoan, interest);
+        let   balanceForLoan = await controller.getBalanceForLoan(maxLoan,  0);
         while(controllerSmc.balance > balanceForLoan) {
           maxLoan *= 2n;
-          balanceForLoan = await controller.getBalanceForLoan(maxLoan, interest);
+          balanceForLoan = await controller.getBalanceForLoan(maxLoan, 0);
         }
         expect(controllerSmc.balance).toBeLessThan(balanceForLoan);
 
-        // TODO: update amounts
         await testRequestLoan(Errors.too_high_loan_request_amount,
                               validator.wallet.getSender(),
                               toNano('100000'),
