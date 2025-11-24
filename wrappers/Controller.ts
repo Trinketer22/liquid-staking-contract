@@ -90,11 +90,15 @@ export class Controller implements Contract {
         });
     }
 
-    static creditMessage(credit:bigint, query_id:number | bigint = 0) {
-        return beginCell().storeUint(Op.controller.credit, 32)
+    static creditMessage(credit:bigint, exp_rev_share?: number, query_id:number | bigint = 0) {
+        const ds = beginCell().storeUint(Op.controller.credit, 32)
                           .storeUint(query_id, 64)
                           .storeCoins(credit)
-               .endCell();
+
+        if(exp_rev_share !== undefined) {
+            ds.storeUint(exp_rev_share, 24);
+        }
+        return ds.endCell();
     }
 
     async sendCredit(provider: ContractProvider,
@@ -105,7 +109,7 @@ export class Controller implements Contract {
         await provider.internal(via, {
             value: value,
             sendMode: SendMode.PAY_GAS_SEPARATELY,
-            body: Controller.creditMessage(credit, query_id)
+            body: Controller.creditMessage(credit, undefined, query_id)
         });
     }
 
