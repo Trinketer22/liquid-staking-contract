@@ -2381,7 +2381,8 @@ describe('Integrational tests', () => {
         });
 
         it('should instant withdraw with price from prev round', async () => {
-            const withdrawAmount = toNano(getRandomInt(10, 100));
+            const tonCount = getRandomInt(10, 100); // Try 68
+            const withdrawAmount = toNano(tonCount);
 
             await setupRevShareMode({});
 
@@ -2449,7 +2450,16 @@ describe('Integrational tests', () => {
             expect(tonAmount).toBeLessThan(curRoundRate);
             expect(tonAmount).toBeLessThanOrEqual(prevRoundRate);
             // 24 bit fixed point has 23 bit effective mantissa
+            try {
             expect(topNBits(tonAmount, 23)).toEqual(topNBits(prevRoundRate, 23));
+            } catch(e) {
+                console.log("Full ton:", tonCount);
+                console.log("Withdraw amount:", withdrawAmount);
+                console.log(`${tonAmount} prevRound: ${prevRoundRate}`)
+                console.log("Round log:", roundLog[1]);
+                console.log("withdrawRate:", poolBefore.currentRound.withdrawRatePrev2X24);
+                throw e;
+            }
 
             let withdrawFee = 0n;
             if(poolBefore.instantWithdrawalFee > 0n) {
