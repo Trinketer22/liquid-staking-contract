@@ -571,7 +571,7 @@ describe('Cotroller mock', () => {
         expect(dataAfter.interest).toEqual(interest);
         snapStates.set('borrowing_req', bc.snapshot());
       });
-      it('Shoul be able to request loan with rev_share', async () => {
+      it('Should be able to request loan with rev_share', async () => {
           await bc.loadFrom(reqReady);
           const testProfitShare = getRandomInt(Number(Conf.shareBase / 100n), Number(Conf.shareBase / 2n));
           const dataBefore = await controller.getControllerData();
@@ -589,6 +589,7 @@ describe('Cotroller mock', () => {
           });
 
           expect((await controller.getControllerData()).acceptableProfitShare).toEqual(testProfitShare);
+          snapStates.set('with_rev_share', bc.snapshot());
       });
       it('Only validator can request loan', async () => {
         const interest = Math.floor(0.05 * Number(Conf.shareBase));
@@ -1024,6 +1025,55 @@ describe('Cotroller mock', () => {
       controllerData = await controller.getControllerData();
       expect(controllerData.borrowedAmount).toEqual(withInterest + extraInterest - 1n);
     });
+    it('Controller should reject credit with rev_share higher than expected', async () => {
+        await loadSnapshot('with_rev_share');
+        const expLoan = toNano('200000');
+        const dataBefore = await controller.getControllerData();
+        const testValues = [dataBefore.acceptableProfitShare + 1, dataBefore.acceptableProfitShare + getRandomInt(2,  dataBefore.acceptableProfitShare / 2)]
+
+        const smc = await bc.getContract(controller.address);
+
+        for(let testVal of testValues) {
+            const creditMsg = Controller.creditMessage(expLoan, testVal)
+            const res = smc.receiveMessage(internal({
+                    from: poolAddress,
+                    to: controller.address,
+                    body: creditMsg,
+                    value: expLoan
+            }));
+            expect(res).toHaveTransaction({
+                    on: controller.address,
+                    from: poolAddress,
+                    aborted: true,
+                    exitCode: Errors.profit_share_mismatch
+            });
+        }
+    });
+    it('Controller should accept share lower than expected', async () => {
+        await loadSnapshot('with_rev_share');
+        const expLoan = toNano('200000');
+        const dataBefore = await controller.getControllerData();
+        expect(dataBefore.state).toEqual(ControllerState.SENT_BORROWING_REQUEST);
+        const testValues = [dataBefore.acceptableProfitShare - 1, dataBefore.acceptableProfitShare - getRandomInt(2,  dataBefore.acceptableProfitShare / 2)]
+
+        for(let testVal of testValues) {
+            const smc = await bc.getContract(controller.address);
+            const creditMsg = Controller.creditMessage(expLoan, testVal)
+            const res = smc.receiveMessage(internal({
+                    from: poolAddress,
+                    to: controller.address,
+                    body: creditMsg,
+                    value: expLoan
+            }));
+            expect(res).toHaveTransaction({
+                    on: controller.address,
+                    from: poolAddress,
+                    aborted: false,
+            });
+            const dataAfter = await controller.getControllerData();
+            expect(dataAfter.state).toEqual(ControllerState.REST);
+        }
+    })
     it('Should account for controller credit', async () => {
       await loadSnapshot('approved');
       const curVset      = getVset(bc.config, 34);

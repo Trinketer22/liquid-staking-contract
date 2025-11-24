@@ -185,6 +185,7 @@ export abstract class Errors {
  static readonly too_high_loan_request_amount = 0xfa04;
  static readonly credit_interest_too_high = 0xfa05;
  static readonly profit_share_mismatch = 0xfa06;
+ static readonly no_withdrawal_rate_available = 0xfc01;
 
  static readonly no_credit = 0xfb00;
  static readonly too_early_loan_return = 0xfb01;
