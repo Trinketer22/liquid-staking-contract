@@ -742,7 +742,7 @@ describe('Governor actions tests', () => {
         });
         await bc.loadFrom(prevState);
     });
-    it('Sodoer should be able to set childCodes', async () => {
+    it('Sudoer should be able to set childCodes', async () => {
         const prevState  = bc.snapshot();
         const newChildCodes: PoolChildCodes = {
             controller: beginCell().storeStringTail("Hop").endCell(),
@@ -768,6 +768,53 @@ describe('Governor actions tests', () => {
         expect(dataAfter.payoutMinterCode).toEqualCell(newChildCodes.payout_minter);
 
         await bc.loadFrom(prevState);
+    });
+    it('Sudoer should be able to set new childCodes partially', async () => {
+        const prevState  = bc.snapshot();
+
+
+        const testPartialCodes = async (codes: Partial<PoolChildCodes>) => {
+            const codeDataMap: Map<keyof PoolChildCodes, keyof Awaited<ReturnType<Pool['getFullData']>>> = new Map([
+                ['controller', 'controllerCode'],
+                ['jetton_wallet', 'jettonWalletCode'],
+                ['payout_minter', 'payoutMinterCode'],
+            ]);
+
+            const dataBefore = await pool.getFullData();
+            const res = await pool.sendSetCodes(deployer.getSender(), codes)
+            expect(res.transactions).toHaveTransaction({
+                    on: pool.address,
+                    op: Op.sudo.set_codes,
+                    aborted: false
+            });
+            const dataAfter = await pool.getFullData();
+            for(let [codeKey, dataKey] of  [...codeDataMap.entries()]) {
+                const newCode = codes[codeKey];
+                if(newCode) {
+                    expect(dataAfter[dataKey]).toEqualCell(newCode)
+                    codeDataMap.delete(codeKey);
+                }
+            }
+            // If anything left, iterate and check that those fields didn't change
+            for(let dataKey of codeDataMap.values()) {
+                expect(dataAfter[dataKey]).toEqualCell(dataBefore[dataKey] as Cell);
+            }
+
+            await bc.loadFrom(prevState);
+        }
+        const randomTestCell = () => beginCell().storeUint(getRandomInt(0, (2 ** 32)) - 1,32 ).endCell();
+
+        let updateController = {controller: randomTestCell()}
+        let updateWallet = {jetton_wallet: randomTestCell()};
+        let updateMinter =  {payout_minter: randomTestCell()};
+        let controllerComb = [{...updateController, ...updateWallet}, {...updateController, ...updateMinter}];
+        let walletComb = [{...updateWallet, ...updateMinter}];
+        // All the minter combs are already exhausted
+
+        let testCases = [updateController, updateWallet, updateMinter, ...controllerComb, ...walletComb];
+        for(let testOpts of testCases) {
+            await testPartialCodes(testOpts);
+        }
     });
     it('Upgrade should not impact code/data when if not specified', async() => {
         const prevState = bc.snapshot();
