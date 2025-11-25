@@ -32,3 +32,26 @@ const int SUDOER_QUARANTINE = 2 * 24 * 3600 ;
     }
     throw(1);
 }
+
+tuple codes_to_tuple([cell, cell, cell] codes) asm "NOP";
+[cell, cell, cell] cast_to_code_triple(tuple t) asm "NOP";
+
+([cell, cell, cell], ()) ~process_sudo_child_codes_upgrade([cell, cell, cell] child_codes, slice sender_address, slice msg, slice sudoer, int sudoer_set_at) inline {
+    assert_sender!(sender_address, sudoer);
+    throw_unless(sudoer::quarantine, now() > sudoer_set_at + SUDOER_QUARANTINE);
+
+    slice codes = msg~load_ref().begin_parse();
+    tuple old_codes = child_codes.codes_to_tuple();
+    tuple new_codes_tuple = empty_tuple();
+
+    int i = 0;
+    repeat(3) {
+        var new_code = codes~load_maybe_ref();
+        if(new_code.null?()) {
+            new_code = old_codes.cell_at(i);
+        }
+        new_codes_tuple~tpush(new_code);
+        i = i + 1;
+    }
+    return (new_codes_tuple.cast_to_code_triple(), ());
+}
