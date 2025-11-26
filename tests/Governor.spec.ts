@@ -769,7 +769,7 @@ describe('Governor actions tests', () => {
 
         await bc.loadFrom(prevState);
     });
-    it('Sudoer should be able to set new childCodes partially', async () => {
+    it('Sudoer should be able to set new childCodes independently', async () => {
         const prevState  = bc.snapshot();
 
 
