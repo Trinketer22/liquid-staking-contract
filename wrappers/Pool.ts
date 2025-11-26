@@ -643,11 +643,11 @@ export class Pool implements Contract {
                   .endCell(),
         });
     }
-    static sudoSetCodesMessage(codes: PoolChildCodes, query_id: bigint | number = 0) {
+    static sudoSetCodesMessage(codes: Partial<PoolChildCodes>, query_id: bigint | number = 0) {
         const codesCell = beginCell()
-                            .storeRef(codes.controller)
-                            .storeRef(codes.jetton_wallet)
-                            .storeRef(codes.payout_minter)
+                            .storeMaybeRef(codes.controller)
+                            .storeMaybeRef(codes.jetton_wallet)
+                            .storeMaybeRef(codes.payout_minter)
                          .endCell();
         return beginCell()
                 .storeUint(Op.sudo.set_codes, 32)
@@ -656,7 +656,7 @@ export class Pool implements Contract {
               .endCell();
     }
 
-    async sendSetCodes(provider: ContractProvider, via: Sender, codes: PoolChildCodes, value: bigint = toNano('0.05'), query_id: bigint | number = 0) {
+    async sendSetCodes(provider: ContractProvider, via: Sender, codes: Partial<PoolChildCodes>, value: bigint = toNano('0.05'), query_id: bigint | number = 0) {
         await provider.internal(via, {
             value,
             sendMode: SendMode.PAY_GAS_SEPARATELY,
