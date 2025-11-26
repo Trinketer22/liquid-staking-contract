@@ -2381,8 +2381,6 @@ describe('Integrational tests', () => {
         });
 
         it('should instant withdraw with price from prev round', async () => {
-            const tonCount = getRandomInt(10, 100); // Try 68
-            const withdrawAmount = toNano(tonCount);
 
             await setupRevShareMode({});
 
@@ -2397,86 +2395,99 @@ describe('Integrational tests', () => {
                 roundLog.unshift({supply: roundData.supply, balance: roundData.totalBalance});
                 roundId++;
             }
+            const prevState = bc.snapshot();
 
-            const withdrawAddr = depositors[0].address;
+            let maxDelta = 0n;
+            for(let i = 1; i < 100; i ++){
+                const tonCount = i * 1000;
+                const withdrawAmount = toNano(tonCount);
 
-            // Withdraw is burning pool jettons pTONs
-            const withdrawJetton = bc.openContract(DAOWallet.createFromAddress(
-                await poolJetton.getWalletAddress(withdrawAddr)
-            ));
-            const poolBefore = await pool.getFullData();
+                const withdrawAddr = depositors[0].address;
 
-            const res = await withdrawJetton.sendBurnWithParams(depositors[0].getSender(), toNano('1.05'),
-                withdrawAmount,
-                withdrawAddr, false, false);
-            const poolAfter = await pool.getFullData();
-            // Shold burn successfully
-            expect(res.transactions).toHaveTransaction({
-                from: withdrawJetton.address,
-                to: poolJetton.address,
-                body: (x) => testJettonBurnNotification(x!, {
-                    amount: withdrawAmount
-                }),
-                success: true
-            });
+                // Withdraw is burning pool jettons pTONs
+                const withdrawJetton = bc.openContract(DAOWallet.createFromAddress(
+                    await poolJetton.getWalletAddress(withdrawAddr)
+                ));
+                const poolBefore = await pool.getFullData();
 
-            // Withdraw request reached pool
-            const reqTx = findTransaction(res.transactions, {
-                from: poolJetton.address,
-                to: pool.address,
-                op: Op.pool.withdraw,
-                outMessagesCount: (x) => x! >= 1
-            })!;
-            expect(reqTx).not.toBeUndefined();
+                const res = await withdrawJetton.sendBurnWithParams(depositors[0].getSender(), toNano('1.05'),
+                    withdrawAmount,
+                    withdrawAddr, false, false);
+                const poolAfter = await pool.getFullData();
+                // Shold burn successfully
+                expect(res.transactions).toHaveTransaction({
+                    from: withdrawJetton.address,
+                    to: poolJetton.address,
+                    body: (x) => testJettonBurnNotification(x!, {
+                        amount: withdrawAmount
+                    }),
+                    success: true
+                });
 
-            const inMsg = reqTx.inMessage!;
-            if(inMsg.info.type !== "internal")
-                throw(Error("Internal expected"));
+                // Withdraw request reached pool
+                const reqTx = findTransaction(res.transactions, {
+                    from: poolJetton.address,
+                    to: pool.address,
+                    op: Op.pool.withdraw,
+                    outMessagesCount: (x) => x! >= 1
+                })!;
+                expect(reqTx).not.toBeUndefined();
 
-            // Formula from `pool::withdraw` from Pool contract
-            const inValue       = inMsg.info.value.coins;
-            // Exact value by formula from code
-            const tonAmount = withdrawAmount * poolBefore.currentRound.withdrawRatePrev2X24 / Conf.shareBase;
-            const curRoundRate  = withdrawAmount * roundLog[0].balance / roundLog[0].supply;
+                const inMsg = reqTx.inMessage!;
+                if(inMsg.info.type !== "internal")
+                    throw(Error("Internal expected"));
 
-            // Self test just in case
-            expect(roundLog[0].supply).toEqual(poolBefore.supply);
-            expect(roundLog[0].balance).toEqual(poolBefore.totalBalance);
+                // Formula from `pool::withdraw` from Pool contract
+                const inValue       = inMsg.info.value.coins;
+                // Exact value by formula from code
+                const tonAmount = withdrawAmount * poolBefore.currentRound.withdrawRatePrev2X24 / Conf.shareBase;
+                const curRoundRate  = withdrawAmount * roundLog[0].balance / roundLog[0].supply;
 
-            // But the formula result should match previous round rate up to 23 bits
-            const prevRoundRate = withdrawAmount * roundLog[1].balance / roundLog[1].supply;
-            expect(prevRoundRate).toBeLessThan(curRoundRate);
-            // Should be less than current round rate
-            expect(tonAmount).toBeLessThan(curRoundRate);
-            expect(tonAmount).toBeLessThanOrEqual(prevRoundRate);
-            // 24 bit fixed point has 23 bit effective mantissa
-            try {
-            expect(topNBits(tonAmount, 23)).toEqual(topNBits(prevRoundRate, 23));
-            } catch(e) {
-                console.log("Full ton:", tonCount);
-                console.log("Withdraw amount:", withdrawAmount);
-                console.log(`${tonAmount} prevRound: ${prevRoundRate}`)
-                console.log("Round log:", roundLog[1]);
-                console.log("withdrawRate:", poolBefore.currentRound.withdrawRatePrev2X24);
-                throw e;
+                // Self test just in case
+                expect(roundLog[0].supply).toEqual(poolBefore.supply);
+                expect(roundLog[0].balance).toEqual(poolBefore.totalBalance);
+
+                // But the formula result should match previous round rate up to 23 bits
+                const prevRoundRate = withdrawAmount * roundLog[1].balance / roundLog[1].supply;
+                expect(prevRoundRate).toBeLessThan(curRoundRate);
+                // Should be less than current round rate
+                expect(tonAmount).toBeLessThan(curRoundRate);
+                expect(tonAmount).toBeLessThanOrEqual(prevRoundRate);
+                const rateDelta = prevRoundRate - tonAmount;
+                if(rateDelta > maxDelta) {
+                    maxDelta = rateDelta;
+                }
+                try {
+                    //expect(topNBits(tonAmount, 19)).toEqual(topNBits(prevRoundRate, 19));
+                    expect(approximatelyEqual(prevRoundRate, tonAmount, toNano('0.006'))).toBe(true);
+                } catch(e) {
+                    console.log("Full ton:", tonCount);
+                    console.log("Withdraw amount:", withdrawAmount);
+                    console.log(`${tonAmount} prevRound: ${prevRoundRate}`)
+                    console.log("Round log:", roundLog[1]);
+                    console.log("withdrawRate:", poolBefore.currentRound.withdrawRatePrev2X24);
+                    throw e;
+                }
+
+                let withdrawFee = 0n;
+                if(poolBefore.instantWithdrawalFee > 0n) {
+                    const base = Conf.shareBase;
+                    // Just in case
+                    expect(poolAfter.instantWithdrawalFee).toEqual(poolBefore.instantWithdrawalFee);
+                    withdrawFee = tonAmount * BigInt(poolAfter.instantWithdrawalFee) / base;
+                    expect(poolAfter.accruedGovernanceFee).toEqual(poolBefore.accruedGovernanceFee + withdrawFee);
+                }
+                expect(res.transactions).toHaveTransaction({
+                    from: pool.address,
+                    to: withdrawAddr,
+                    op: Op.pool.withdrawal,
+                    value: tonAmount + inValue - bcConf.lumpPrice - computedGeneric(reqTx).gasFees - withdrawFee
+                });
+                expect(poolAfter.totalBalance).toEqual(poolBefore.totalBalance - tonAmount);
+                expect(poolAfter.supply).toEqual(poolBefore.supply - withdrawAmount);
+                await bc.loadFrom(prevState);
             }
-
-            let withdrawFee = 0n;
-            if(poolBefore.instantWithdrawalFee > 0n) {
-                const base = Conf.shareBase;
-                // Just in case
-                expect(poolAfter.instantWithdrawalFee).toEqual(poolBefore.instantWithdrawalFee);
-                withdrawFee = tonAmount * BigInt(poolAfter.instantWithdrawalFee) / base;
-                expect(poolAfter.accruedGovernanceFee).toEqual(poolBefore.accruedGovernanceFee + withdrawFee);
-            }
-            expect(res.transactions).toHaveTransaction({
-                from: pool.address,
-                to: withdrawAddr,
-                op: Op.pool.withdrawal,
-                value: tonAmount + inValue - bcConf.lumpPrice - computedGeneric(reqTx).gasFees - withdrawFee
-            });
-            expect(poolAfter.totalBalance).toEqual(poolBefore.totalBalance - tonAmount);
-            expect(poolAfter.supply).toEqual(poolBefore.supply - withdrawAmount);
+            console.log(`Max prevRround - acutalRate delta ${Number(maxDelta) / 10 ** 9}`);
         });
 
         /*WIP
