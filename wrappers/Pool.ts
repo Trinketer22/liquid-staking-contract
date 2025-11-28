@@ -733,6 +733,12 @@ export class Pool implements Contract {
 
       return stack.readAddress();
     }
+    async getPoolCode(provider: ContractProvider) {
+        const res = await provider.getState();
+        if(res.state.type !== 'active') {
+            throw new Error(`Pool contract is not active`)
+        }
+    }
     async getFullData(provider: ContractProvider) {
         let { stack } = await provider.get('get_pool_full_data', []);
         let contract_version = stack.remaining == 34 ? 2 : stack.remaining == 35 ? 3 : 1;
