@@ -706,7 +706,7 @@ export class Pool implements Contract {
         let res = await this.getFullData(provider);
         return res.currentRound.roundId;
     }
-    async getBorrowersDict(provider: ContractProvider, previous=false) {
+    async getBorrowersDict(provider: ContractProvider, previous=false): Promise<Dictionary<bigint, BorrowerDiscription>> {
        let res = await this.getFullData(provider);
        let borrowers = res.currentRound.borrowers;
         if(previous) {
@@ -715,7 +715,7 @@ export class Pool implements Contract {
         if (borrowers == null) {
             return Dictionary.empty();
         }
-        const dict = Dictionary.loadDirect(Dictionary.Keys.BigInt(256), BorrowerDiscriptionValue, borrowers.asSlice());
+        const dict = Dictionary.loadDirect(Dictionary.Keys.BigUint(256), BorrowerDiscriptionValue, borrowers.asSlice());
         return dict;
     }
 
