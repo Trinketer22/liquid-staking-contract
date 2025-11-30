@@ -1,4 +1,4 @@
-import { Address, Cell, Contract, ContractProvider} from "@ton/core";
+import { Address, Cell, Contract, ContractProvider, Dictionary} from "@ton/core";
 
 export class Config implements Contract {
 	constructor(readonly address: Address,readonly init?: { code: Cell; data: Cell}){}
@@ -16,5 +16,9 @@ export class Config implements Contract {
         }
         const dataCell = Cell.fromBoc(state.state.data)[0];
         return dataCell.refs[0];
+    }
+    async getConfigDict(provider: ContractProvider) {
+        const configCell = await this.getConfigCell(provider);
+        return Dictionary.loadDirect(Dictionary.Keys.Int(32), Dictionary.Values.Cell(), configCell);
     }
 }
