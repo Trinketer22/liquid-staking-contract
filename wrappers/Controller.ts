@@ -416,4 +416,16 @@ export class Controller implements Contract {
             until: stack.readNumber()
         };
     }
+    async getControllerId(provider: ContractProvider) {
+        const state = await provider.getState();
+        if(state.state.type !== 'active') {
+            throw new Error("Controller is not active!");
+        }
+
+        const dataCell = Cell.fromBoc(state.state.data!)[0];
+        const staticData = dataCell.refs[0]
+        const ds = staticData.beginParse();
+
+        return ds.loadUint(32);
+    }
 }
