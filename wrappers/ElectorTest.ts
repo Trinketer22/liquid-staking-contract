@@ -1,5 +1,5 @@
 import { Elector } from './Elector';
-import { Address, Cell, beginCell, Dictionary } from '@ton/core';
+import { Address, Cell, beginCell, Dictionary, ContractProvider, DictionaryValue } from '@ton/core';
 import { loadConfig, getStakeConf, packElect, getElectionsConf } from './ValidatorUtils';
 import { Blockchain, BlockchainContractProvider, SandboxContractProvider, TickOrTock } from '@ton/sandbox';
 
@@ -55,6 +55,24 @@ export class ElectorTest extends Elector {
 
   async sendTickTock(provider: SandboxContractProvider, which: TickOrTock) {
     await provider.tickTock(which);
+  }
+  async getParticipantsDict(provider: ContractProvider) {
+        const state = await provider.getState();
+        if(state.state.type !== 'active') {
+            throw new Error("Elector is not active!");
+        }
+        const participantInfo: () => DictionaryValue<void> = () => {
+            return {
+                serialize(src, builder) {
+                    throw new Error("Serialize not implemented!")
+                },
+                parse(slice) {
+                }
+            }
+        }
+
+        const dataCell = Cell.fromBoc(state.state.data!)[0];
+        return Dictionary.load(Dictionary.Keys.BigUint(256), participantInfo(), dataCell);
   }
 
 }
