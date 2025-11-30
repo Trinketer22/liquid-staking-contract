@@ -345,26 +345,49 @@ export class Controller implements Contract {
     // Get methods
     async getControllerData(provider: ContractProvider) {
         const {stack} = await provider.get('get_validator_controller_data', []);
-        return {
-            state: stack.readNumber(),
-            halted: stack.readBoolean(),
-            approved: stack.readBoolean(),
-            stakeSent: stack.readBigNumber(),
-            stakeAt: stack.readNumber(),
-            validatorSetHash: stack.readBigNumber(),
-            validatorSetChangeCount: stack.readNumber(),
-            validatorSetChangeTime: stack.readNumber(),
-            stakeHeldFor: stack.readNumber(),
-            interest: stack.readNumber(),
-            allowedBorrowStartPriorElectionsEnd: stack.readNumber(),
-            approverSetProfitShare: stack.readNumber(),
-            acceptableProfitShare: stack.readNumber(),
-            allocation: stack.readBigNumber(),
-            borrowedAmount: stack.readBigNumber(),
+        const controllerVersion = stack.remaining == 19 ? 2 : 1;
+
+        const basicStateParams = {
+            state : stack.readNumber(),
+            halted : stack.readBoolean(),
+            approved : stack.readBoolean(),
+            stakeSent : stack.readBigNumber(),
+            stakeAt : stack.readNumber(),
+            validatorSetHash : stack.readBigNumber(),
+            validatorSetChangeCount : stack.readNumber(),
+            validatorSetChangeTime : stack.readNumber(),
+            stakeHeldFor : stack.readNumber(),
+        };
+
+        let v2Params = {
+            interest : 0,
+            allowedBorrowStartPriorElectionsEnd: 0,
+            approverSetProfitShare: 0,
+            acceptableProfitShare: 0,
+            allocation: 0n
+        };
+
+        if(controllerVersion == 2) {
+            v2Params = {
+                interest : stack.readNumber(),
+                allowedBorrowStartPriorElectionsEnd: stack.readNumber(),
+                approverSetProfitShare: stack.readNumber(),
+                acceptableProfitShare: stack.readNumber(),
+                allocation: stack.readBigNumber(),
+            }
+        }
+        const basicBorrowingParameters = {            borrowedAmount: stack.readBigNumber(),
             borrowingTime: stack.readNumber(),
             validator: stack.readAddress(),
             pool: stack.readAddress(),
             sudoer: stack.readAddressOpt()
+        };
+
+
+        return {
+            ...basicStateParams,
+            ...v2Params,
+            ...basicBorrowingParameters
         };
     }
     async getValidatorAmount(provider: ContractProvider) {
