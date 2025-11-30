@@ -1,20 +1,25 @@
 #include "metadata_utils.func";
+#include "types.func";
+#include "auto/metadata.func";
 
-global cell controller_code;
-global cell payout_minter_code;
+;; [controller_code, pool_jetton_wallet_code, payout_minter_code]
+global [cell, cell, cell] child_contract_codes;
 
 slice addr_none() asm "b{00} PUSHSLICE";
 builder store_zeros(builder b, int n) asm "STZEROES";
 
 cell controller_init_data (cell static_data) {
   ;; TODO optimize with store_zeros
+  ;; Note, given maximal amounts equal to 5'000'000'000 TONs
+  ;; all store_coins sizes are limited to 67 bits
+  ;; so the size is at most 8+1+1+67+48+128+8+48+48+67+48+267+48+24+48+24+24+67 = 974 bits
   return begin_cell()
             .store_uint(0, 8) ;; state
             .store_bool(false)  ;; halted
             .store_bool(false)  ;; approved
             .store_coins(0) ;; stake_amount_sent
             .store_timestamp(0) ;; stake_at
-            .store_uint(0, 256) ;; saved_validator_set_hash
+            .store_uint(0, 128) ;; saved_validator_set_hash higher 128 bits
             .store_uint(0, 8) ;; validator_set_changes_count
             .store_timestamp(0) ;; validator_set_change_time
             .store_timestamp(0) ;; stake_held_for
@@ -23,6 +28,10 @@ cell controller_init_data (cell static_data) {
             .store_uint(0, 2) ;; sudoer addr_none
             .store_timestamp(0) ;; sudoer_set_at
             .store_share(0)     ;; max_expected_interest
+            .store_timestamp(0) ;; allowed_borrow_start_prior_elections_end
+            .store_share(0)    ;; approver_set_profit_share
+            .store_share(0)    ;; acceptable_profit_share
+            .store_coins(0)    ;; allocation
             .store_ref(static_data)
            .end_cell();
 }
@@ -30,7 +39,7 @@ cell controller_init_data (cell static_data) {
 cell controller_init_state (cell static_data) {
     return begin_cell()
             .store_uint(0, 1 + 1) ;; split_depth (Maybe = 0) and special (Maybe = 0)
-            .store_maybe_ref(controller_code)
+            .store_maybe_ref(child_contract_codes.triple_first())
             .store_maybe_ref(controller_init_data(static_data))
             .store_uint(0,1) ;; libraries - empty cell
             .end_cell();
@@ -59,8 +68,8 @@ cell calculate_payout_state_init(slice pool_address, int round_id, int distribut
     content_dict~udict_set_ref(256, "description"H, pack_metadata_value("Converts burned Pool Jettons to TON"));
   }
   content_dict~udict_set_ref(256, "symbol"H, pack_metadata_value("⏲️"));
-  content_dict~udict_set_ref(256, "uri"H, pack_metadata_value("my-custom-stake-address.ton"));
-  content_dict~udict_set_ref(256, "image"H, pack_metadata_value("my-custom-stake-address.ton/icon.img"));
+  content_dict~udict_set_ref(256, "uri"H, pack_metadata_value(NFT_URI));
+  content_dict~udict_set_ref(256, "image"H, pack_metadata_value(NFT_IMAGE_URI));
   content_dict~udict_set_ref(256, "render_type"H, pack_metadata_value("hidden"));
   ;; To make payout address unpredictable we use two sources of difficult to know in advance data:
   ;; Hash of contract storage and block random seed
@@ -77,7 +86,7 @@ cell calculate_payout_state_init(slice pool_address, int round_id, int distribut
            .end_cell();
   return begin_cell()
             .store_uint(0, 1 + 1) ;; split_depth (Maybe = 0) and special (Maybe = 0)
-            .store_maybe_ref(payout_minter_code)
+            .store_maybe_ref(child_contract_codes.triple_third())
             .store_maybe_ref(data)
             .store_uint(0,1) ;; libraries - empty cell
             .end_cell();

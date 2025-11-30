@@ -1,11 +1,10 @@
-import { Address, Tuple, TupleItem, TupleItemInt, TupleReader, toNano } from "ton";
-import { Cell, Slice, Sender, SenderArguments, ContractProvider, Message, beginCell, Dictionary, MessageRelaxed, Transaction, fromNano } from "ton-core";
-import { Blockchain, BlockchainTransaction, MessageParams, SendMessageResult, SmartContract, SmartContractTransaction } from "@ton-community/sandbox";
+import { Address, Tuple, TupleItem, TupleItemInt, TupleReader, toNano, Cell, Slice, Sender, SenderArguments, ContractProvider, Message, beginCell, Dictionary, MessageRelaxed, Transaction, fromNano } from "@ton/core";
+import { Blockchain, BlockchainTransaction, MessageParams, SendMessageResult, SmartContract, SmartContractTransaction } from "@ton/sandbox";
 import { computeMessageForwardFees, MsgPrices } from "./fees";
 import { Op } from "./PoolConstants";
-import { MessageValue } from "ton-core/dist/types/Message";
-import { compareTransaction, flattenTransaction, FlatTransactionComparable } from "@ton-community/test-utils";
-import { extractEvents } from "@ton-community/sandbox/dist/event/Event";
+import { MessageValue } from "@ton/core/dist/types/Message";
+import { compareTransaction, flattenTransaction, FlatTransactionComparable } from "@ton/test-utils";
+import { extractEvents } from "@ton/sandbox/dist/event/Event";
 
 
 const randomAddress = (wc: number = 0) => {
@@ -82,12 +81,24 @@ export const getRandomTon = (min:number | string | bigint, max:number | string |
     return toNano(getRandom(minVal, maxVal).toFixed(9));
 }
 
+export const topNBits = (value: bigint, n: number) => {
+    const maxVal = BigInt((2 ** n) - 1);
+    while(value > maxVal) {
+        value /= 2n;
+    }
+    return value;
+}
+
 export const buff2bigint = (buff: Buffer) : bigint => {
     return BigInt("0x" + buff.toString("hex"));
 }
 
 export const bigint2buff = (num:bigint) : Buffer => {
-    return Buffer.from(num.toString(16), 'hex')
+    let hexStr = num.toString(16);
+    if(hexStr.length % 2 != 0) {
+        hexStr = "0" + hexStr;
+    }
+    return Buffer.from(hexStr, 'hex')
 }
 
 export const computedGeneric = (trans:Transaction) => {

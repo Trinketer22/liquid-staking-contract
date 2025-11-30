@@ -1,10 +1,10 @@
-import { Blockchain,BlockchainSnapshot, createShardAccount,internal,SandboxContract,SendMessageResult,SmartContractTransaction,TreasuryContract } from "@ton-community/sandbox";
-import { Controller, controllerConfigToCell } from '../wrappers/Controller';
-import { Address, Sender, Cell, toNano, Dictionary, beginCell } from 'ton-core';
+import { Blockchain,BlockchainSnapshot, createShardAccount,internal,SandboxContract,SendMessageResult,SmartContractTransaction,TreasuryContract } from "@ton/sandbox";
+import { ApproveOptions, Controller, ControllerConfig, controllerConfigToCell } from '../wrappers/Controller';
+import { Address, Sender, Cell, toNano, Dictionary, beginCell } from '@ton/core';
 import { keyPairFromSeed, getSecureRandomBytes, getSecureRandomWords, KeyPair } from 'ton-crypto';
-import '@ton-community/test-utils';
-import { compile } from '@ton-community/blueprint';
-import { FlatTransactionComparable, randomAddress } from "@ton-community/test-utils";
+import '@ton/test-utils';
+import { compile } from '@ton/blueprint';
+import { FlatTransactionComparable, randomAddress } from "@ton/test-utils";
 import { calcMaxPunishment, getElectionsConf, getValidatorsConf, getVset, loadConfig, packValidatorsSet } from "../wrappers/ValidatorUtils";
 import { buff2bigint, computedGeneric, differentAddress, getMsgExcess, getRandomInt, getRandomTon, sendBulkMessage } from "../utils";
 import { Conf, ControllerState, Errors, Op } from "../PoolConstants";
@@ -38,7 +38,7 @@ describe('Cotroller mock', () => {
     let simpleBody:(op: number, query_id?: bigint | number) => Cell;
     let bouncedBody:(op: number, query_id?: bigint | number) => Cell;
     let assertHashUpdate:(exp_hash: Buffer | bigint, exp_time:number, exp_count:number) => Promise<void>;
-    let testApprove:(exp_code:number, via:Sender, approve:boolean) => Promise<SendMessageResult>;
+    let testApprove:(exp_code:number, via:Sender, approve:boolean, opts?:ApproveOptions) => Promise<SendMessageResult>;
     let testRequestLoan:(exp_code: number,
                          via: Sender,
                          min_loan: bigint,
@@ -75,7 +75,7 @@ describe('Cotroller mock', () => {
           balance: toNano('1000')
         }));
 
-        let controllerConfig = {
+        let controllerConfig : ControllerConfig = {
           controllerId:0,
           validator: validator.wallet.address,
           pool: poolAddress,
@@ -119,7 +119,7 @@ describe('Cotroller mock', () => {
 
         assertHashUpdate = async (exp_hash:Buffer | bigint, exp_time:number, exp_count:number) => {
           const curData  = await controller.getControllerData();
-          const testHash = exp_hash instanceof Buffer ? buff2bigint(exp_hash) : exp_hash; 
+          const testHash = exp_hash instanceof Buffer ? buff2bigint(exp_hash.slice(0, 16)) : exp_hash;
           expect(curData.validatorSetHash).toEqual(testHash);
           expect(curData.validatorSetChangeTime).toEqual(exp_time);
           expect(curData.validatorSetChangeCount).toEqual(exp_count);
@@ -146,11 +146,20 @@ describe('Cotroller mock', () => {
           await bc.loadFrom(state);
         }
 
-        testApprove  = async (exp_code:number, via: Sender, approve:boolean) => {
+        testApprove  = async (exp_code:number, via: Sender, approve:boolean, opts?: ApproveOptions) => {
+          let   res : SendMessageResult;
           const stateBefore = await getContractData(controller.address);
-          const approveBefore = (await controller.getControllerData()).approved;
-          expect(approveBefore).not.toEqual(approve);
-          const res = await controller.sendApprove(via, approve);
+          const dataBefore  = await controller.getControllerData();
+          const approveExt  = approve && opts;
+          expect(dataBefore.approved).not.toEqual(approve);
+
+          if(approveExt) {
+            res = await controller.sendApproveExtended(via, opts);
+          }
+          else {
+            res = await controller.sendApprove(via, approve);
+          }
+
           expect(res.transactions).toHaveTransaction({
             from: via.address!,
             to: controller.address,
@@ -162,7 +171,16 @@ describe('Cotroller mock', () => {
             expect(await getContractData(controller.address)).toEqualCell(stateBefore);
           }
           else {
-            expect((await controller.getControllerData()).approved).toEqual(approve);
+            const dataAfter = await controller.getControllerData();
+            if(approveExt) {
+              expect(dataAfter.allowedBorrowStartPriorElectionsEnd).toEqual(opts.startPriorElectionsEnd);
+              expect(dataAfter.allocation).toEqual(opts.allocation);
+            }
+            else {
+              expect(dataAfter.allowedBorrowStartPriorElectionsEnd).toEqual(65536);
+              expect(dataAfter.allocation).toEqual(0n);
+            }
+            expect(dataAfter.approved).toEqual(approve);
           }
           return res;
         };
@@ -175,6 +193,7 @@ describe('Cotroller mock', () => {
 
           const stateBefore = await getControllerState();
 
+          // console.log((await bc.getContract(controller.address)).balance);
           const res = await controller.sendRequestLoan(via, min_loan, max_loan, interest);
           expect(res.transactions).toHaveTransaction({
             from: via.address!,
@@ -389,7 +408,7 @@ describe('Cotroller mock', () => {
           async () => controller.sendRequestLoan(deployer.getSender(),
                                                  toNano('100000'),
                                                  toNano('200000'),
-                                                 Math.floor(256 * 256 * 256 * 0.1)),
+                                                 Math.floor(Number(Conf.shareBase) * 0.1)),
           async () => controller.sendReturnUnusedLoan(deployer.getSender())
         ];
 
@@ -444,7 +463,7 @@ describe('Cotroller mock', () => {
           async () => bc.sendMessage(internal({
             from: poolAddress,
             to: controller.address,
-            body: bouncedBody(Op.pool.request_loan),
+            body: bouncedBody(Op.pool.request_loan2),
             bounced: true,
             value: toNano('100000')
           }))
@@ -474,34 +493,27 @@ describe('Cotroller mock', () => {
         }
       });
     });
-    it('Controller credit should only be accepted from pool address', async() => {
-      const notPool = differentAddress(poolAddress);
-      const stateBefore  = await getContractData(controller.address);
-      const borrowAmount = getRandomTon(100000, 200000)
-      // 2000 TON interest
-      const msgVal       = borrowAmount + toNano('2000');
-      let res = await controller.sendCredit(bc.sender(notPool), borrowAmount, msgVal);
-      expect(res.transactions).toHaveTransaction({
-        from: notPool,
-        to: controller.address,
-        success: false,
-        exitCode: Errors.wrong_sender
-      });
 
-      expect(await getContractData(controller.address)).toEqualCell(stateBefore);
-
-      res = await controller.sendCredit(bc.sender(poolAddress), borrowAmount, msgVal);
-      expect(res.transactions).toHaveTransaction({
-        from: poolAddress,
-        to: controller.address,
-        success: true
-      });
-    });
     it('Approve should only be accepted from approver address', async () => {
       const notApprover  = differentAddress(deployer.address);
       await testApprove(Errors.wrong_sender, bc.sender(notApprover), true);
     });
 
+    it('Approve extended should only be accepted from approver address', async () => {
+      const prevState    = bc.snapshot();
+      const notApprover  = differentAddress(deployer.address);
+      const approveExtra = {
+        allocation: getRandomTon(100000, 200000),
+        startPriorElectionsEnd: getRandomInt(20000, 30000),
+        profitShare: getRandomInt(Number(Conf.shareBase / 100n), Number(Conf.shareBase / 2n))
+      };
+      await testApprove(Errors.wrong_sender, bc.sender(notApprover), true, approveExtra);
+
+      const res = await testApprove(Errors.success, deployer.getSender(), true, approveExtra);
+
+      snapStates.set('profit_share_set', bc.snapshot());
+      await bc.loadFrom(prevState);
+    });
     it('Approve from approver address should set approve flag', async () => {
       await testApprove(0, deployer.getSender(), true);
       snapStates.set('approved', bc.snapshot());
@@ -517,7 +529,7 @@ describe('Cotroller mock', () => {
     });
 
     describe('Request loan', () => {
-      const interest = Math.floor(0.05 * 256 * 256 * 256);
+      const interest = Conf.testInterest;
       let approved : BlockchainSnapshot;
       let reqReady : BlockchainSnapshot;
 
@@ -552,14 +564,35 @@ describe('Cotroller mock', () => {
         const reqMsg    = res.outMessages.get(0)!;
         if(reqMsg.info.type !== "internal")
           throw Error("Should be internal");
-        expect(reqMsg.body.beginParse().preloadUint(32)).toEqual(Op.pool.request_loan);
+        expect(reqMsg.body.beginParse().preloadUint(32)).toEqual(Op.pool.request_loan2);
 
         const dataAfter = await controller.getControllerData();
         expect(dataAfter.state).toEqual(ControllerState.SENT_BORROWING_REQUEST);
+        expect(dataAfter.interest).toEqual(interest);
         snapStates.set('borrowing_req', bc.snapshot());
       });
+      it('Should be able to request loan with rev_share', async () => {
+          await bc.loadFrom(reqReady);
+          const testProfitShare = getRandomInt(Number(Conf.shareBase / 100n), Number(Conf.shareBase / 2n));
+          const dataBefore = await controller.getControllerData();
+          expect(dataBefore.acceptableProfitShare).toBe(0);
+          const res = await controller.sendRequestLoan(validator.wallet.getSender(),
+                                                   toNano('100000'),
+                                                   toNano('200000'),
+                                                   0,
+                                                   testProfitShare);
+          expect(res.transactions).toHaveTransaction({
+                  on: controller.address,
+                  from: validator.wallet.address,
+                  op: Op.controller.send_request_loan,
+                  aborted: false
+          });
+
+          expect((await controller.getControllerData()).acceptableProfitShare).toEqual(testProfitShare);
+          snapStates.set('with_rev_share', bc.snapshot());
+      });
       it('Only validator can request loan', async () => {
-        const interest = Math.floor(0.05 * 256*256*256);
+        const interest = Math.floor(0.05 * Number(Conf.shareBase));
         await testRequestLoan(Errors.wrong_sender,
                               deployer.getSender(),
                               toNano('100000'),
@@ -637,6 +670,91 @@ describe('Cotroller mock', () => {
         });
         expect(await getControllerState()).toEqualCell(stateBefore);
       });
+      it('Should honor loan request interval before elections end', async () => {
+        const prevState = bc.snapshot();
+        randVset();
+        const curVset = getVset(bc.config, 34);
+        const testOptions: ApproveOptions = {
+          allocation: 0n,
+          startPriorElectionsEnd: getRandomInt(10000, 20000)
+        };
+
+        //console.log("Testing start prior election end:", testOptions.startPriorElectionsEnd);
+
+        let res = await testApprove(0, deployer.getSender(), true, testOptions);
+        let dataBefore = await controller.getControllerData();
+        expect(dataBefore.allowedBorrowStartPriorElectionsEnd).toEqual(testOptions.startPriorElectionsEnd);
+
+        bc.now = curVset.utime_unitl - eConf.end_before - testOptions.startPriorElectionsEnd;
+
+        const loanAmount   = toNano('20000');
+        const borrowAmount = loanAmount + (loanAmount * BigInt(interest) / Conf.shareBase);
+
+        await testRequestLoan(Errors.too_early_loan_request,
+                              validator.wallet.getSender(),
+                              loanAmount,
+                              loanAmount,
+                              interest);
+
+        bc.now++;
+        await testRequestLoan(0,
+                              validator.wallet.getSender(),
+                              loanAmount,
+                              loanAmount,
+                              interest);
+        await bc.loadFrom(prevState);
+      });
+      it('should not allow max_loan higher than allocation', async () => {
+        const prevState = bc.snapshot();
+        randVset();
+        await controller.sendUpdateHash(validator.wallet.getSender());
+        const testOptions: ApproveOptions = {
+          allocation: getRandomTon(100000, 200000),
+          startPriorElectionsEnd: getRandomInt(10000, 20000),
+        };
+        let res = await testApprove(0, deployer.getSender(), true, testOptions);
+        let dataBefore = await controller.getControllerData();
+        expect(dataBefore.allowedBorrowStartPriorElectionsEnd).toEqual(testOptions.startPriorElectionsEnd);
+
+        const curVset = getVset(bc.config, 34);
+        const electStarted = curVset.utime_unitl - eConf.begin_before + 1;
+
+        bc.now = curVset.utime_unitl - eConf.end_before - testOptions.startPriorElectionsEnd + 1;
+
+        await testRequestLoan(Errors.too_high_loan_request_amount,
+                              validator.wallet.getSender(),
+                              toNano('50000'),
+                              testOptions.allocation + 1n,
+                              interest);
+
+        await testRequestLoan(0,
+                              validator.wallet.getSender(),
+                              toNano('50000'),
+                              testOptions.allocation,
+                              interest);
+
+
+        await bc.loadFrom(prevState);
+      });
+      it.skip('should reject allowed_borrow_start_prior_elections_end = 0', async () => {
+        const prevState = bc.snapshot();
+        randVset();
+        const testOptions: ApproveOptions = {
+          allocation: getRandomTon(100000, 200000),
+          startPriorElectionsEnd: 0,
+        };
+        await controller.sendApproveExtended(deployer.getSender(), testOptions);
+        const curState = await controller.getControllerData();
+        expect(curState.approved).toBe(false);
+        /* Either this request should be rejected
+         * Or
+         * throw_unless(error::too_early_loan_request, now() > utime_until - elections_start_before); ;; elections started
+           throw_unless(error::too_early_loan_request, now() > utime_until - elections_end_before - allowed_borrow_start_prior_elections_end);
+
+           would contradict
+         */
+        await bc.loadFrom(prevState);
+      })
       it('Should not be able to request loan if previous loan is not returned yet', async () => {
         await loadSnapshot('approved');
 
@@ -669,8 +787,8 @@ describe('Cotroller mock', () => {
         // Test that changes of interest changes required balance
         let   higherInterest = BigInt(interest * 2);
         let   higherReq      = await controller.getBalanceForLoan(maxLoan, higherInterest);
-        let   expStakeGrow   = maxLoan * BigInt( 2 * interest) / (256n*256n*256n) -
-                               maxLoan * BigInt( interest) / (256n*256n*256n);
+        let   expStakeGrow   = maxLoan * BigInt( 2 * interest) / Conf.shareBase  -
+                               maxLoan * BigInt( interest) / Conf.shareBase;
         expect(higherReq).toBeGreaterThan(baseReq);
         expect(higherReq - baseReq).toEqual(expStakeGrow);
       });
@@ -732,12 +850,32 @@ describe('Cotroller mock', () => {
         await bc.loadFrom(reqReady);
 
         let   maxLoan = toNano('200000');
+        /* Problem here is not the amouns, it's that after interest has been removed from the loan cost estimation,
+         * There is no more loan proportional reserve requirement for controller
+         * Without Config parameter 40 only required reserve is storage + 101 TON
+         * Therefore let's take proportional punishment config from test above
+         * It will add proportilnal component back
+        */
+
+        const confDict = loadConfig(bc.config);
+        confDict.set(40, beginCell()
+                         .storeUint(1, 8) //prefix
+                         .storeCoins(toNano('101')) //Default flat fine
+                         .storeUint(2 ** 8, 32) // 1/4 of the stake
+                         .storeUint(256, 16)
+                         .storeUint(256, 16)
+                         .storeUint(0, 16)
+                         .storeUint(0, 16)
+                         .storeUint(256, 16)
+                         .storeUint(256, 16)
+                        .endCell());
+        bc.setConfig(beginCell().storeDictDirect(confDict).endCell());
 
         const controllerSmc  = await bc.getContract(controller.address);
-        let   balanceForLoan = await controller.getBalanceForLoan(maxLoan, interest);
+        let   balanceForLoan = await controller.getBalanceForLoan(maxLoan,  0);
         while(controllerSmc.balance > balanceForLoan) {
           maxLoan *= 2n;
-          balanceForLoan = await controller.getBalanceForLoan(maxLoan, interest);
+          balanceForLoan = await controller.getBalanceForLoan(maxLoan, 0);
         }
         expect(controllerSmc.balance).toBeLessThan(balanceForLoan);
 
@@ -763,7 +901,7 @@ describe('Cotroller mock', () => {
         const res = await bc.sendMessage(internal({
           from: differentAddress(poolAddress),
           to: controller.address,
-          body: bouncedBody(Op.pool.request_loan, 0),
+          body: bouncedBody(Op.pool.request_loan2, 0),
           value: toNano('1'),
           bounced: true
         }));
@@ -775,7 +913,7 @@ describe('Cotroller mock', () => {
         const res = await bc.sendMessage(internal({
           from: poolAddress,
           to: controller.address,
-          body: bouncedBody(Op.pool.request_loan, 0),
+          body: bouncedBody(Op.pool.request_loan2, 0),
           value: toNano('1'),
           bounced: true
         }));
@@ -849,6 +987,112 @@ describe('Cotroller mock', () => {
       });
     });
     describe('Credit', () => {
+    it('Controller credit should only be accepted from pool address', async() => {
+      // Request should come first, otherwise max_interest would be 0
+      await loadSnapshot('creditAwaited');
+      const notPool = differentAddress(poolAddress);
+      const stateBefore  = await getContractData(controller.address);
+      const controllerData = await controller.getControllerData();
+      const borrowAmount = getRandomTon(100000, 200000);
+      const withInterest = borrowAmount + borrowAmount * BigInt(Conf.testInterest) / Conf.shareBase;
+      let res = await controller.sendCredit(bc.sender(notPool), withInterest, borrowAmount);
+      expect(res.transactions).toHaveTransaction({
+        from: notPool,
+        to: controller.address,
+        success: false,
+        exitCode: Errors.wrong_sender
+      });
+
+      expect(await getContractData(controller.address)).toEqualCell(stateBefore);
+
+      res = await controller.sendCredit(bc.sender(poolAddress), withInterest, borrowAmount);
+      expect(res.transactions).toHaveTransaction({
+        from: poolAddress,
+        to: controller.address,
+        success: true
+      });
+      const controllerAfter = await controller.getControllerData();
+      expect(controllerAfter.interest).toEqual(Conf.testInterest);
+    });
+    it('Controller should reject credit with interest higher that expected', async () => {
+      await loadSnapshot('creditAwaited');
+      const stateBefore  = await getContractData(controller.address);
+      let   controllerData = await controller.getControllerData();
+      expect(controllerData.borrowedAmount).toEqual(0n);
+      const borrowAmount = getRandomTon(100000, 200000);
+      const withInterest = borrowAmount + borrowAmount * BigInt(controllerData.interest) / Conf.shareBase;
+      // If interest exceed expected by >= 1 TON, controller should return credit
+      const extraInterest = toNano('1');
+      let   res = await controller.sendCredit(bc.sender(poolAddress), withInterest + extraInterest, borrowAmount);
+      expect(res.transactions).toHaveTransaction({
+        on: controller.address,
+        from: poolAddress,
+        op: Op.controller.credit,
+        success: false,
+        aborted: true,
+        exitCode: Errors.credit_interest_too_high
+      });
+      expect(await getContractData(controller.address)).toEqualCell(stateBefore);
+
+      res = await controller.sendCredit(bc.sender(poolAddress), withInterest + extraInterest - 1n, borrowAmount);
+      expect(res.transactions).toHaveTransaction({
+        on: controller.address,
+        from: poolAddress,
+        op: Op.controller.credit,
+        aborted: false
+      });
+      controllerData = await controller.getControllerData();
+      expect(controllerData.borrowedAmount).toEqual(withInterest + extraInterest - 1n);
+    });
+    it('Controller should reject credit with rev_share higher than expected', async () => {
+        await loadSnapshot('with_rev_share');
+        const expLoan = toNano('200000');
+        const dataBefore = await controller.getControllerData();
+        const testValues = [dataBefore.acceptableProfitShare + 1, dataBefore.acceptableProfitShare + getRandomInt(2,  dataBefore.acceptableProfitShare / 2)]
+
+        const smc = await bc.getContract(controller.address);
+
+        for(let testVal of testValues) {
+            const creditMsg = Controller.creditMessage(expLoan, testVal)
+            const res = smc.receiveMessage(internal({
+                    from: poolAddress,
+                    to: controller.address,
+                    body: creditMsg,
+                    value: expLoan
+            }));
+            expect(res).toHaveTransaction({
+                    on: controller.address,
+                    from: poolAddress,
+                    aborted: true,
+                    exitCode: Errors.profit_share_mismatch
+            });
+        }
+    });
+    it('Controller should accept share lower than expected', async () => {
+        await loadSnapshot('with_rev_share');
+        const expLoan = toNano('200000');
+        const dataBefore = await controller.getControllerData();
+        expect(dataBefore.state).toEqual(ControllerState.SENT_BORROWING_REQUEST);
+        const testValues = [dataBefore.acceptableProfitShare - 1, dataBefore.acceptableProfitShare - getRandomInt(2,  dataBefore.acceptableProfitShare / 2)]
+
+        for(let testVal of testValues) {
+            const smc = await bc.getContract(controller.address);
+            const creditMsg = Controller.creditMessage(expLoan, testVal)
+            const res = smc.receiveMessage(internal({
+                    from: poolAddress,
+                    to: controller.address,
+                    body: creditMsg,
+                    value: expLoan
+            }));
+            expect(res).toHaveTransaction({
+                    on: controller.address,
+                    from: poolAddress,
+                    aborted: false,
+            });
+            const dataAfter = await controller.getControllerData();
+            expect(dataAfter.state).toEqual(ControllerState.REST);
+        }
+    })
     it('Should account for controller credit', async () => {
       await loadSnapshot('approved');
       const curVset      = getVset(bc.config, 34);
@@ -1152,12 +1396,11 @@ describe('Cotroller mock', () => {
       });
       it('New stake wrong round', async () => {
         const deposit    = toNano('100000');
-        // We have to do that because we can't roll time back without emulator account timestamp error
-        await bc.loadFrom(InitialState);
+        randVset();
         const curSet = getVset(bc.config, 34);
         // Too early
         bc.now = curSet.utime_since;
-        await controller.sendCredit(bc.sender(poolAddress), toNano('200000'), toNano('201000'));
+
         await testNewStake(Errors.newStake.wrongly_used_credit,
                            validator.wallet.getSender(),
                            deposit);
@@ -1220,7 +1463,7 @@ describe('Cotroller mock', () => {
         expect(stateAfter.stakeSent).toEqual(deposit - Conf.electorOpValue);
         const confDict = loadConfig(bc.config);
         expect(stateAfter.validatorSetHash).toEqual(
-          buff2bigint(confDict.get(34)!.hash())
+          buff2bigint(confDict.get(34)!.hash().slice(0, 16))
         );
         expect(stateAfter.validatorSetChangeCount).toEqual(0);
         expect(stateAfter.validatorSetChangeTime).toEqual(getVset(confDict, 34).utime_since);
@@ -1736,7 +1979,7 @@ describe('Cotroller mock', () => {
       it('Hash update should not trigger if vset hash didn\'t change', async () => {
         const stateBefore = await getContractData(controller.address);
         const confDict = loadConfig(bc.config);
-        const curHash  = buff2bigint(confDict.get(34)!.hash());
+        const curHash  = buff2bigint(confDict.get(34)!.hash().slice(0, 16));
         expect((await controller.getControllerData()).validatorSetHash).toEqual(curHash);
         let noNewSetHashUpdateResult = await controller.sendUpdateHash(validator.wallet.getSender());
         expect(noNewSetHashUpdateResult.transactions).toHaveTransaction({
@@ -2063,7 +2306,7 @@ describe('Cotroller mock', () => {
       it('Request loan is only allowed in REST state', async () => {
         const minLoan = toNano('100000');
         const maxLoan = toNano('200000');
-        const interest = Math.floor(0.1 * 256*256*256);
+        const interest = Math.floor(0.1 * Number(Conf.shareBase));
         const testCb = async () => controller.sendRequestLoan(validator.wallet.getSender(), minLoan, maxLoan, interest);
         await testStates(statesAvailable.filter(x => x !== InitialState), wrongState, testCb);
         await bc.loadFrom(InitialState);

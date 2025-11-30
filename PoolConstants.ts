@@ -1,4 +1,9 @@
-import {toNano} from "ton-core";
+import {toNano} from "@ton/core";
+
+export abstract class Metadata {
+    static readonly NFT_URI = "my-custom-stake-address.ton";
+    static readonly NFT_IMAGE_URI = "my-custom-stake-address.ton/icon.img";
+}
 
 export abstract class Conf {
     static readonly electorOpValue = toNano('1.03');
@@ -12,7 +17,7 @@ export abstract class Conf {
     static readonly stakeRecoverFine = toNano('10');
     static readonly gracePeriod    = 600;
     static readonly governorQuarantine = 86400;
-    static readonly sudoQuarantine = 86400;
+    static readonly sudoQuarantine = 2 * 24 * 3600;
     static readonly serviceNotificationAmount = toNano('0.02');
     static readonly governanceFee  = 155n * BigInt(2 ** 8);
     static readonly finalizeRoundFee = toNano('1');
@@ -30,6 +35,7 @@ export abstract class Op {
         top_up : 0xd372158c,
         update_validator_hash : 0xf0fd2250,
         approve : 0x7b4b42e6,
+        approve_extended : 0x7b2142e6,
         disapprove : 0xe8a0abfe,
         recover_stake : 0xeb373a05,
         credit : 0x1690c604,
@@ -48,13 +54,17 @@ export abstract class Op {
     }
     static readonly pool = {
         request_loan   : 0xe642c965,
+        request_loan2  : 0xba33982d,
         loan_repayment : 0xdfdca27b,
         deposit        : 0x47d54391,
         withdraw       : 0x319B0CDC,
         withdrawal     : 0x0a77535c,
         deploy_controller : 0xb27edcad,
         touch: 0x4bc7c2df,
-        donate: 0x73affe21
+        donate: 0x73affe21,
+        // Method called unsafe because data may change till response reach requester
+        get_conversion_rate_unsafe : 0x4b7b42e6,
+        take_conversion_rate_unsafe : 0x42e64b7b
     }
     static readonly governor = {
         set_sudoer : 0x79e7c016,
@@ -67,15 +77,18 @@ export abstract class Op {
     }
     static readonly sudo = {
         send_message : 0x270695fb,
-        upgrade : 0x96e7f528
+        upgrade : 0x96e7f528,
+        set_codes: 0x18f30547
     }
     static readonly halter = {
-        halt : 0x139a1b4e
+        halt : 0x139a1b4e,
+        partial_halt : 0x77778888
     }
     static readonly interestManager = {
         set_interest : 0xc9f04485,
         operation_fee : 0x54d37487,
         request_notification : 0xb1ebae06,
+        set_operational_params: 0x4485c9f0,
         stats : 0xc1344900,
     }
     static readonly jetton = {
@@ -127,6 +140,7 @@ export abstract class Errors {
  static readonly interest_too_low = 0xf100;
  static readonly contradicting_borrowing_params = 0xf101;
  static readonly not_enough_funds_for_loan = 0xf102;
+ static readonly too_early_borrowing_request = 0xf105;
  static readonly total_credit_too_high = 0xf103;
 
  static readonly deposit_amount_too_low = 0xf200;
@@ -169,7 +183,12 @@ export abstract class Errors {
  static readonly too_early_loan_request = 0xfa02;
  static readonly too_late_loan_request = 0xfa03;
  static readonly too_high_loan_request_amount = 0xfa04;
+ static readonly credit_interest_too_high = 0xfa05;
+ static readonly profit_share_mismatch = 0xfa06;
+ static readonly no_withdrawal_rate_available = 0xfc01;
 
  static readonly no_credit = 0xfb00;
  static readonly too_early_loan_return = 0xfb01;
+
+ static readonly contradicting_operational_params = 0xfc00;
 }

@@ -1,4 +1,4 @@
-import { Address, beginCell, Cell, Contract, contractAddress, ContractProvider, Sender, SendMode, toNano, TupleBuilder, Dictionary, DictionaryValue, Message, storeMessage } from 'ton-core';
+import { Address, beginCell, Cell, Contract, contractAddress, ContractProvider, Sender, SendMode, toNano, TupleBuilder, Dictionary, DictionaryValue, Message, storeMessage } from '@ton/core';
 
 import { PayoutCollection } from "./PayoutNFTCollection";
 import { Conf, Op, PoolState } from "../PoolConstants";
@@ -13,6 +13,7 @@ export type PoolConfig = {
   interest_manager: Address;
   halter: Address;
   approver: Address;
+  treasury?: Address;
   
   controller_code: Cell;
   payout_wallet_code?: Cell;
@@ -23,7 +24,7 @@ export type PoolConfig = {
 type RoundData = {borrowers: Cell | null, roundId: number,
                                   activeBorrowers: bigint, borrowed: bigint,
                                   expected: bigint, returned: bigint,
-                                  profit: bigint};
+                                  profit: bigint, withdrawRatePrev2X24: bigint};
 
 type State = typeof PoolState.NORMAL | typeof PoolState.REPAYMENT_ONLY;
 export type PoolFullConfig = {
@@ -39,6 +40,7 @@ export type PoolFullConfig = {
   interestRate: number;
   optimisticDepositWithdrawals: boolean;
   depositsOpen: boolean;
+  instantWithdrawalFee: number;
   savedValidatorSetHash: bigint;
   currentRound: RoundData;
   prevRound: RoundData;
@@ -47,6 +49,10 @@ export type PoolFullConfig = {
   maxLoanPerValidator: bigint;
 
   governanceFee: number;
+  accruedGovernanceFee: bigint;
+
+  disbalanceTolerance: number;
+  creditStartPriorElectionsEnd: number;
 
   sudoer: Address;
   sudoerSetAt: number;
@@ -55,11 +61,17 @@ export type PoolFullConfig = {
   interest_manager: Address;
   halter: Address;
   approver: Address;
+  treasury?: Address;
 
   controller_code: Cell;
   pool_jetton_wallet_code: Cell;
   payout_minter_code: Cell;
 };
+export type PoolChildCodes = {
+    controller: Cell,
+    jetton_wallet: Cell,
+    payout_minter: Cell
+}
 
 export type PoolData = Awaited<ReturnType<InstanceType<typeof Pool>['getFullData']>>;
 
@@ -81,18 +93,20 @@ export function poolConfigToCell(config: PoolConfig): Cell {
                           .storeUint(0, 1) // no deposit_minter
                           .storeUint(0, 1) // no withdrawal_minter
                       .endCell();
+
+    let rolesExtra = beginCell().storeAddress(config.halter)
+                                .storeAddress(config.approver)
+    if(config.treasury) {
+      rolesExtra.storeAddress(config.treasury);
+    }
+
     let roles = beginCell()
                    .storeAddress(config.sudoer)
                    .storeUint(0, 48) // sudoer set at
                    .storeAddress(config.governor)
                    .storeUint(0xffffffffffff, 48) // givernor update after
                    .storeAddress(config.interest_manager)
-                   .storeRef(
-                       beginCell()
-                         .storeAddress(config.halter)
-                         .storeAddress(config.approver)
-                       .endCell()
-                   )
+                   .storeRef(rolesExtra.endCell())
                 .endCell();
     let codes = beginCell()
                     .storeRef(config.controller_code)
@@ -107,6 +121,7 @@ export function poolConfigToCell(config: PoolConfig): Cell {
               .storeUint(Conf.testInterest, 24) // minimal interest_rate
               .storeInt(config.optimistic_deposit_withdrawals, 1) // optimistic_deposit_withdrawals
               .storeInt(-1n, 1) // deposits_open?
+              .storeUint(0, 24) // instant_withdrawal_fee
               .storeUint(0, 256) // saved_validator_set_hash
               .storeRef(
                 beginCell()
@@ -117,6 +132,9 @@ export function poolConfigToCell(config: PoolConfig): Cell {
               .storeCoins(100 * 1000000000) // min_loan_per_validator
               .storeCoins(1000000 * 1000000000) // max_loan_per_validator
               .storeUint(155 * (2 ** 8), 24) // governance fee
+              .storeCoins(0) //accruedGovernanceFee
+              .storeUint(30, 8) // disbalance tolerance
+              .storeUint(0, 48) //creditStartPriorElectionsEnd
               .storeRef(roles)
               .storeRef(codes)
            .endCell();
@@ -142,12 +160,16 @@ export function dataToFullConfig(data: PoolData) : PoolFullConfig {
     interestRate: data.interestRate,
     optimisticDepositWithdrawals: data.optimisticDepositWithdrawals,
     depositsOpen: data.depositsOpen,
+    instantWithdrawalFee: data.instantWithdrawalFee,
     savedValidatorSetHash: data.savedValidatorSetHash,
     currentRound: data.currentRound,
     prevRound: data.previousRound,
     minLoanPerValidator: data.minLoan,
     maxLoanPerValidator: data.maxLoan,
     governanceFee: data.governanceFee,
+    accruedGovernanceFee: data.accruedGovernanceFee,
+    disbalanceTolerance: data.disbalanceTolerance,
+    creditStartPriorElectionsEnd: data.creditStartPriorElectionsEnd,
     sudoer: data.sudoer,
     sudoerSetAt: data.sudoerSetAt,
     governor: data.governor,
@@ -161,7 +183,8 @@ export function dataToFullConfig(data: PoolData) : PoolFullConfig {
   };
 }
 
-export function poolFullConfigToCell(config: PoolFullConfig): Cell {
+
+export function poolFullConfigToCellOld(config: PoolFullConfig): Cell {
     let abs = (x:bigint) => { return x < 0n ? -x : x };
     let serializeRoundData = (round: RoundData) => beginCell()
                              .storeMaybeRef(round.borrowers)
@@ -220,6 +243,7 @@ export function poolFullConfigToCell(config: PoolFullConfig): Cell {
               .storeUint(config.interestRate, 24) // minimal interest_rate
               .storeBit(config.optimisticDepositWithdrawals) // optimistic_deposit_withdrawals
               .storeBit(config.depositsOpen) // deposits_open?
+              //.storeUint(config.instantWithdrawalFee, 24)
               .storeUint(config.savedValidatorSetHash, 256) // saved_validator_set_hash
               .storeRef(
                 beginCell()
@@ -230,6 +254,91 @@ export function poolFullConfigToCell(config: PoolFullConfig): Cell {
               .storeCoins(config.minLoanPerValidator) // min_loan_per_validator
               .storeCoins(config.maxLoanPerValidator) // max_loan_per_validator
               .storeUint(config.governanceFee, 24) // governance fee
+              //.storeCoins(config.accruedGovernanceFee)
+              //.storeUint(config.disbalanceTolerance, 8)
+              //.storeUint(config.creditStartPriorElectionsEnd, 48)
+              .storeRef(roles)
+              .storeRef(codes)
+           .endCell();
+}
+
+
+export function poolFullConfigToCell(config: PoolFullConfig): Cell {
+    let abs = (x:bigint) => { return x < 0n ? -x : x };
+    let serializeRoundData = (round: RoundData) => beginCell()
+                             .storeMaybeRef(round.borrowers)
+                             .storeUint(round.roundId, 32) // round_id
+                             .storeUint(round.activeBorrowers, 32) // active borrowers
+                             .storeCoins(round.borrowed) // borrowed
+                             .storeCoins(round.expected) // expected
+                             .storeCoins(round.returned) // returned
+                             .storeUint(Number(round.profit < 0), 1) // profit sign
+                             .storeCoins(abs(round.profit)) // profit
+                         .endCell();
+
+    let mintersData = beginCell()
+                          .storeAddress(config.poolJetton)
+                          .storeCoins(config.poolJettonSupply);
+    if(config.depositMinter) {
+      mintersData = mintersData.storeUint(1, 1)
+                               .storeUint(0, 1)
+                               .storeAddress(config.depositMinter!)
+                               .storeCoins(config.requestedForDeposit!);
+    } else {
+      mintersData = mintersData.storeUint(0, 1);
+    }
+    if(config.withdrawalMinter) {
+      mintersData = mintersData.storeUint(1, 1)
+                               .storeBit(0)
+                               .storeAddress(config.withdrawalMinter!)
+                               .storeCoins(config.requestedForWithdrawal!);
+    } else {
+      mintersData = mintersData.storeUint(0, 1);
+    }
+    let minters:Cell = mintersData.endCell();
+
+    let rolesExtra = beginCell().storeAddress(config.halter)
+                                .storeAddress(config.approver)
+    if(config.treasury) {
+      rolesExtra.storeAddress(config.treasury);
+    }
+
+
+    let roles = beginCell()
+                   .storeAddress(config.sudoer)
+                   .storeUint(config.sudoerSetAt, 48) // sudoer set at
+                   .storeAddress(config.governor)
+                   .storeUint(config.governorUpdateAfter, 48) // givernor update after
+                   .storeAddress(config.interest_manager)
+                   .storeRef(rolesExtra.endCell())
+                .endCell();
+    let codes = beginCell()
+                    .storeRef(config.controller_code)
+                    .storeRef(config.pool_jetton_wallet_code)
+                    .storeRef(config.payout_minter_code)
+                .endCell();
+    return beginCell()
+              .storeUint(config.state, 8) // state NORMAL
+              .storeBit(config.halted) // halted?
+              .storeCoins(config.totalBalance) // total_balance
+              .storeRef(minters)
+              .storeUint(config.interestRate, 24) // minimal interest_rate
+              .storeBit(config.optimisticDepositWithdrawals) // optimistic_deposit_withdrawals
+              .storeBit(config.depositsOpen) // deposits_open?
+              .storeUint(config.instantWithdrawalFee, 24)
+              .storeUint(config.savedValidatorSetHash, 256) // saved_validator_set_hash
+              .storeRef(
+                beginCell()
+                  .storeRef(serializeRoundData(config.currentRound))
+                  .storeRef(serializeRoundData(config.prevRound))
+                .endCell()
+              )
+              .storeCoins(config.minLoanPerValidator) // min_loan_per_validator
+              .storeCoins(config.maxLoanPerValidator) // max_loan_per_validator
+              .storeUint(config.governanceFee, 24) // governance fee
+              .storeCoins(config.accruedGovernanceFee)
+              .storeUint(config.disbalanceTolerance, 8)
+              .storeUint(config.creditStartPriorElectionsEnd, 48)
               .storeRef(roles)
               .storeRef(codes)
            .endCell();
@@ -305,7 +414,9 @@ export class Pool implements Contract {
                   .endCell(),
         });
    }
-    async sendSetDepositSettings(provider: ContractProvider, via: Sender, value: bigint, optimistic: Boolean, depositOpen: Boolean) {
+    async sendSetDepositSettings(provider: ContractProvider, via: Sender, value: bigint,
+                                 optimistic: Boolean, depositOpen: Boolean,
+                                 instantWithdrawalFee: number = 0, revShare: number = 0) {
         await provider.internal(via, {
             value,
             sendMode: SendMode.PAY_GAS_SEPARATELY,
@@ -314,6 +425,8 @@ export class Pool implements Contract {
                      .storeUint(1, 64) // query id
                      .storeUint(Number(optimistic), 1)
                      .storeUint(Number(depositOpen), 1)
+                     .storeUint(instantWithdrawalFee, 24)
+                     .storeUint(revShare, 24)
                   .endCell(),
         });
     }
@@ -350,6 +463,41 @@ export class Pool implements Contract {
                   .endCell(),
         });
     }
+    async sendSetOperationalParameters(provider: ContractProvider, via: Sender,
+                                       min_validator_loan: bigint, max_validator_loan: bigint,
+                                       disbalance_tolerance: number | bigint, credit_start_before: number, query_id: number | bigint = 0) {
+        await provider.internal(via, {
+            value: toNano('0.1'),
+            sendMode: SendMode.PAY_GAS_SEPARATELY,
+            body: beginCell()
+                    .storeUint(Op.interestManager.set_operational_params, 32)
+                    .storeUint(query_id, 64)
+                    .storeCoins(min_validator_loan)
+                    .storeCoins(max_validator_loan)
+                    .storeUint(disbalance_tolerance, 8)
+                    .storeUint(credit_start_before, 48)
+                .endCell()
+        });
+    }
+
+    async sendSetMinLoan(provider: ContractProvider, via: Sender, min_loan: bigint, query_id: number | bigint = 0) {
+        const oldData = await this.getFullData(provider);
+        await this.sendSetOperationalParameters(provider, via, min_loan, oldData.maxLoan, oldData.disbalanceTolerance, oldData.creditStartPriorElectionsEnd,query_id);
+    }
+
+    async sendSetMaxLoan(provider: ContractProvider, via: Sender, max_loan: bigint, query_id: number | bigint = 0) {
+        const oldData = await this.getFullDataRaw(provider);
+        await this.sendSetOperationalParameters(provider, via, oldData.minLoan, max_loan, oldData.disbalanceTolerance, oldData.creditStartPriorElectionsEnd,query_id);
+    }
+    async sendSetDisbalanceTolerance(provider: ContractProvider, via: Sender, disbalance_tolerance: bigint, query_id: number | bigint = 0) {
+        const oldData = await this.getFullDataRaw(provider);
+        await this.sendSetOperationalParameters(provider, via, oldData.minLoan, oldData.maxLoan, disbalance_tolerance, oldData.creditStartPriorElectionsEnd,query_id);
+    }
+    async sendSetCreditStartPriorElectionsEnd(provider: ContractProvider, via: Sender, start_prior: number, query_id: number | bigint = 0) {
+        const oldData = await this.getFullDataRaw(provider);
+        await this.sendSetOperationalParameters(provider, via, oldData.minLoan, oldData.maxLoan, oldData.disbalanceTolerance, start_prior, query_id);
+    }
+
     async sendSetGovernanceFee(provider: ContractProvider, via: Sender, fee: number | bigint, query_id: number | bigint = 1) {
       await provider.internal(via, {
         value: toNano('0.3'),
@@ -363,19 +511,27 @@ export class Pool implements Contract {
     }
 
     async sendSetRoles(provider: ContractProvider, via: Sender,
-                       governor: Address | null,
-                       interestManager: Address | null,
-                       halter: Address | null,
-                       approver: Address | null) {
+                       roles: {
+                         governor?: Address ,
+                         interestManager?: Address,
+                         halter?: Address,
+                         approver?: Address,
+                         treasury?: Address
+                       },
+                      ) {
         let body = beginCell()
                      .storeUint(Op.governor.set_roles, 32)
                      .storeUint(1, 64);
-        for (let role of [governor, interestManager, halter, approver]) {
+        for (let role of [roles.governor, roles.interestManager, roles.halter, roles.approver]) {
             if(role) {
               body = body.storeBit(true).storeAddress(role!);
             } else {
               body = body.storeBit(false);
             }
+        }
+        // Optimize message size
+        if(roles.treasury) {
+          body.storeBit(true).storeAddress(roles.treasury);
         }
         await provider.internal(via, {
             value: toNano('1'),
@@ -417,6 +573,38 @@ export class Pool implements Contract {
         });
     }
 
+    static partialHaltMessage(stopOptimistic: boolean, closeDeposits: boolean, query_id: bigint | number = 0) {
+      return beginCell()
+              .storeUint(Op.halter.partial_halt, 32)
+              .storeUint(query_id, 64)
+              .storeBit(stopOptimistic)
+              .storeBit(closeDeposits)
+            .endCell();
+    }
+    async sendPartialHalt(provider: ContractProvider, via: Sender, stopOptimistic: boolean, closeDeposits: boolean,
+                          value: bigint = toNano('0.1'), query_id: bigint | number =0) {
+      await provider.internal(via, {
+        sendMode: SendMode.PAY_GAS_SEPARATELY,
+        value,
+        body: Pool.partialHaltMessage(stopOptimistic, closeDeposits, query_id)
+      });
+    }
+
+    static conversionRateUnsafeMessage(query_id: bigint | number = 0) {
+      return beginCell()
+              .storeUint(Op.pool.get_conversion_rate_unsafe, 32)
+              .storeUint(query_id, 64)
+             .endCell();
+    }
+    async sendConversionRateUnsafe(provider: ContractProvider, via: Sender,
+                                   value: bigint = toNano('0.05'), query_id: bigint | number = 0) {
+      await provider.internal(via,{
+        value,
+        body: Pool.conversionRateUnsafeMessage(query_id),
+        sendMode: SendMode.PAY_GAS_SEPARATELY
+      });
+    }
+
     async sendUnhalt(provider: ContractProvider, via: Sender, query_id: bigint | number = 0) {
         await provider.internal(via, {
             sendMode: SendMode.PAY_GAS_SEPARATELY,
@@ -455,19 +643,25 @@ export class Pool implements Contract {
                   .endCell(),
         });
     }
+    static sudoSetCodesMessage(codes: Partial<PoolChildCodes>, query_id: bigint | number = 0) {
+        const codesCell = beginCell()
+                            .storeMaybeRef(codes.controller)
+                            .storeMaybeRef(codes.jetton_wallet)
+                            .storeMaybeRef(codes.payout_minter)
+                         .endCell();
+        return beginCell()
+                .storeUint(Op.sudo.set_codes, 32)
+                .storeUint(query_id, 64)
+                .storeRef(codesCell)
+              .endCell();
+    }
 
-    async sendDepositSettings(provider:ContractProvider, via:Sender, optimistic:boolean, open:boolean) {
-
-      await provider.internal(via, {
-        value: toNano('0.15'),
-        sendMode: SendMode.PAY_GAS_SEPARATELY,
-        body: beginCell()
-                .storeUint(Op.governor.set_deposit_settings, 32)
-                .storeUint(1, 64)
-                .storeBit(optimistic)
-                .storeBit(open)
-              .endCell(),
-      });
+    async sendSetCodes(provider: ContractProvider, via: Sender, codes: Partial<PoolChildCodes>, value: bigint = toNano('0.05'), query_id: bigint | number = 0) {
+        await provider.internal(via, {
+            value,
+            sendMode: SendMode.PAY_GAS_SEPARATELY,
+            body: Pool.sudoSetCodesMessage(codes, query_id)
+        });
     }
 
     // Get methods
@@ -541,12 +735,21 @@ export class Pool implements Contract {
     }
     async getFullData(provider: ContractProvider) {
         let { stack } = await provider.get('get_pool_full_data', []);
+        let contract_version = stack.remaining == 34 ? 2 : stack.remaining == 35 ? 3 : 1;
         let state = stack.readNumber() as State;
         let halted = stack.readBoolean();
         let totalBalance = stack.readBigNumber();
         let interestRate = stack.readNumber();
         let optimisticDepositWithdrawals = stack.readBoolean();
         let depositsOpen = stack.readBoolean();
+        let instantWithdrawalFee = 0;
+        if(contract_version >= 2) {
+            instantWithdrawalFee = stack.readNumber();
+        }
+        let revShare = 0;
+        if (contract_version >= 3) {
+            revShare = stack.readNumber();
+        }
         let savedValidatorSetHash = stack.readBigNumber();
 
         let prv = stack.readTuple();
@@ -557,6 +760,7 @@ export class Pool implements Contract {
         let prvExpected = prv.readBigNumber();
         let prvReturned = prv.readBigNumber();
         let prvProfit = prv.readBigNumber();
+        let prvWithdrawRatePrev2X24 = prv.readBigNumber();
         let previousRound = {
           borrowers: prvBorrowers,
           roundId: prvRoundId,
@@ -564,7 +768,8 @@ export class Pool implements Contract {
           borrowed: prvBorrowed,
           expected: prvExpected,
           returned: prvReturned,
-          profit: prvProfit
+          profit: prvProfit,
+          withdrawRatePrev2X24: prvWithdrawRatePrev2X24
         };
 
         let cur = stack.readTuple();
@@ -575,6 +780,7 @@ export class Pool implements Contract {
         let curExpected = cur.readBigNumber();
         let curReturned = cur.readBigNumber();
         let curProfit = cur.readBigNumber();
+        let curWithdrawRatePrev2X24 = cur.readBigNumber();
         let currentRound = {
           borrowers: curBorrowers,
           roundId: curRoundId,
@@ -582,12 +788,22 @@ export class Pool implements Contract {
           borrowed: curBorrowed,
           expected: curExpected,
           returned: curReturned,
-          profit: curProfit
+          profit: curProfit,
+          withdrawRatePrev2X24: curWithdrawRatePrev2X24
         };
 
         let minLoan = stack.readBigNumber();
         let maxLoan = stack.readBigNumber();
         let governanceFee = stack.readNumber();
+
+        let accruedGovernanceFee = 0n;
+        let disbalanceTolerance = 30;
+        let creditStartPriorElectionsEnd = 0;
+        if(contract_version >= 2) {
+            accruedGovernanceFee = stack.readBigNumber();
+            disbalanceTolerance = stack.readNumber();
+            creditStartPriorElectionsEnd = stack.readNumber();
+        }
 
 
         let poolJettonMinter = stack.readAddress();
@@ -618,13 +834,14 @@ export class Pool implements Contract {
         return {
             state, halted,
             totalBalance, interestRate,
-            optimisticDepositWithdrawals, depositsOpen,
+            optimisticDepositWithdrawals, depositsOpen, instantWithdrawalFee, revShare,
             savedValidatorSetHash,
 
             previousRound, currentRound,
 
             minLoan, maxLoan,
-            governanceFee,
+            governanceFee, accruedGovernanceFee,
+            disbalanceTolerance, creditStartPriorElectionsEnd,
 
             poolJettonMinter, poolJettonSupply, supply:poolJettonSupply,
             depositPayout, requestedForDeposit,
@@ -646,12 +863,21 @@ export class Pool implements Contract {
 
     async getFullDataRaw(provider: ContractProvider) {
         let { stack } = await provider.get('get_pool_full_data_raw', []);
+        let contract_version = stack.remaining == 34 ? 2 : stack.remaining == 35 ? 3 : 1;
         let state = stack.readNumber() as State;
         let halted = stack.readBoolean();
         let totalBalance = stack.readBigNumber();
         let interestRate = stack.readNumber();
         let optimisticDepositWithdrawals = stack.readBoolean();
         let depositsOpen = stack.readBoolean();
+        let instantWithdrawalFee = 0;
+        if(contract_version >= 2) {
+            instantWithdrawalFee = stack.readNumber();
+        }
+        let revShare = 0;
+        if (contract_version >= 3) {
+            revShare = stack.readNumber();
+        }
         let savedValidatorSetHash = stack.readBigNumber();
 
         let prv = stack.readTuple();
@@ -662,14 +888,16 @@ export class Pool implements Contract {
         let prvExpected = prv.readBigNumber();
         let prvReturned = prv.readBigNumber();
         let prvProfit = prv.readBigNumber();
+        let prvWithdrawRatePrev2X24 = prv.readBigNumber();
         let previousRound = {
-          borrowers: prvBorrowers,
-          roundId: prvRoundId,
-          activeBorrowers: prvActiveBorrowers,
-          borrowed: prvBorrowed,
-          expected: prvExpected,
-          returned: prvReturned,
-          profit: prvProfit
+            borrowers: prvBorrowers,
+            roundId: prvRoundId,
+            activeBorrowers: prvActiveBorrowers,
+            borrowed: prvBorrowed,
+            expected: prvExpected,
+            returned: prvReturned,
+            profit: prvProfit,
+            withdrawRatePrev2X24: prvWithdrawRatePrev2X24
         };
 
         let cur = stack.readTuple();
@@ -680,19 +908,30 @@ export class Pool implements Contract {
         let curExpected = cur.readBigNumber();
         let curReturned = cur.readBigNumber();
         let curProfit = cur.readBigNumber();
+        let curWithdrawRatePrev2X24 = cur.readBigNumber();
         let currentRound = {
-          borrowers: curBorrowers,
-          roundId: curRoundId,
-          activeBorrowers: curActiveBorrowers,
-          borrowed: curBorrowed,
-          expected: curExpected,
-          returned: curReturned,
-          profit: curProfit
+            borrowers: curBorrowers,
+            roundId: curRoundId,
+            activeBorrowers: curActiveBorrowers,
+            borrowed: curBorrowed,
+            expected: curExpected,
+            returned: curReturned,
+            profit: curProfit,
+            withdrawRatePrev2X24: curWithdrawRatePrev2X24
         };
 
         let minLoan = stack.readBigNumber();
         let maxLoan = stack.readBigNumber();
         let governanceFee = stack.readNumber();
+
+        let accruedGovernanceFee = 0n;
+        let disbalanceTolerance = 30;
+        let creditStartPriorElectionsEnd = 0;
+        if(contract_version >= 2) {
+            accruedGovernanceFee = stack.readBigNumber();
+            disbalanceTolerance = stack.readNumber();
+            creditStartPriorElectionsEnd = stack.readNumber();
+        }
 
 
         let poolJettonMinter = stack.readAddress();
@@ -723,13 +962,14 @@ export class Pool implements Contract {
         return {
             state, halted,
             totalBalance, interestRate,
-            optimisticDepositWithdrawals, depositsOpen,
+            optimisticDepositWithdrawals, depositsOpen, instantWithdrawalFee, revShare,
             savedValidatorSetHash,
 
             previousRound, currentRound,
 
             minLoan, maxLoan,
-            governanceFee,
+            governanceFee, accruedGovernanceFee,
+            disbalanceTolerance, creditStartPriorElectionsEnd,
 
             poolJettonMinter, poolJettonSupply, supply:poolJettonSupply,
             depositPayout, requestedForDeposit,

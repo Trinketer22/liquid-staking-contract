@@ -1,27 +1,26 @@
 #include "asserts.func";
 
-;; common function in all contracts
-global slice sudoer;
-global int sudoer_set_at;
 
-const int SUDOER_QUARANTINE = 86400;
+const int SUDOER_QUARANTINE = 2 * 24 * 3600 ;
 
-() process_sudo_request(slice sender, slice in_msg) impure inline_ref {
+() process_sudo_request(slice sender, slice in_msg, slice sudoer, int sudoer_set_at) impure inline_ref {
     assert_sender!(sender, sudoer);
     throw_unless(sudoer::quarantine, now() > sudoer_set_at + SUDOER_QUARANTINE);
     int mode = in_msg~load_uint(8);
     cell message  = in_msg~load_ref();
     send_raw_message(message, mode);
+    in_msg.end_parse();
 }
 
 
 () execute(cont c) impure asm "EXECUTE";
-() process_sudo_upgrade_request(slice sender, slice in_msg) impure inline_ref {
+() process_sudo_upgrade_request(slice sender, slice in_msg, slice sudoer, int sudoer_set_at) impure inline_ref {
     assert_sender!(sender, sudoer);
     throw_unless(sudoer::quarantine, now() > sudoer_set_at + SUDOER_QUARANTINE);
     cell data = in_msg~load_maybe_ref();
     cell code = in_msg~load_maybe_ref();
     cell after_upgrade = in_msg~load_maybe_ref();
+    in_msg.end_parse();
     ifnot(data.null?()) {
       set_data(data);
     }
@@ -32,4 +31,29 @@ const int SUDOER_QUARANTINE = 86400;
       execute(after_upgrade.begin_parse().bless());
     }
     throw(1);
+}
+
+([cell, cell, cell], ()) ~process_sudo_child_codes_upgrade([cell, cell, cell] child_codes, slice sender_address, slice msg, slice sudoer, int sudoer_set_at) inline {
+    assert_sender!(sender_address, sudoer);
+    throw_unless(sudoer::quarantine, now() > sudoer_set_at + SUDOER_QUARANTINE);
+
+    slice codes = msg~load_ref().begin_parse();
+    var (controller_code, wallet_code, payout_code) = child_codes.untriple();
+
+    cell new_code = codes~load_maybe_ref();
+    ifnot(new_code.null?()) {
+        controller_code = new_code;
+    }
+
+    new_code = codes~load_maybe_ref();
+    ifnot(new_code.null?()) {
+        wallet_code = new_code;
+    }
+
+    new_code = codes~load_maybe_ref();
+    ifnot(new_code.null?()) {
+        payout_code = new_code;
+    }
+
+    return ([controller_code, wallet_code, payout_code], ());
 }

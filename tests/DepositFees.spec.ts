@@ -1,13 +1,13 @@
-import { Blockchain, SandboxContract, TreasuryContract, BlockchainSnapshot } from '@ton-community/sandbox';
-import { Cell, toNano, fromNano, beginCell, Address, Dictionary } from 'ton-core';
+import { Blockchain, SandboxContract, TreasuryContract, BlockchainSnapshot } from '@ton/sandbox';
+import { Cell, toNano, fromNano, beginCell, Address, Dictionary } from '@ton/core';
 import { Pool } from '../wrappers/Pool';
 import { Controller } from '../wrappers/Controller';
 import { JettonMinter as DAOJettonMinter, jettonContentToCell } from '../contracts/jetton_dao/wrappers/JettonMinter';
 import { setConsigliere } from '../wrappers/PayoutMinter.compile';
 import { getElectionsConf, getVset, loadConfig, packValidatorsSet } from "../wrappers/ValidatorUtils";
-import '@ton-community/test-utils';
+import '@ton/test-utils';
 import { readFileSync } from 'fs';
-import { compile } from '@ton-community/blueprint';
+import { compile } from '@ton/blueprint';
 
 export function readCompiled(name: string): Cell {
     const filename = 'build/' + name + '.compiled.json';
@@ -83,7 +83,7 @@ describe('Deposit Fees Printer', () => {
         payout_collection = await compile('PayoutNFTCollection');
 
         pool_code = await compile('Pool');
-        controller_code = readCompiled('Controller');
+        controller_code = await compile('Controller');
 
         let dao_wallet_code_raw = await compile('DAOJettonWallet');
         dao_minter_code = await compile('DAOJettonMinter');
