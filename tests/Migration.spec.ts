@@ -41,7 +41,7 @@ let newControllers: SandboxContract<Controller>[];
 let newPoolCode: Cell;
 let newControllerCode: Cell;
 
-let fetchStates: (accounts: Address[], retryCount?: number, key?: string) => Promise<void>;
+let fetchStates: (accounts: Address[], opts: Partial<{ retryCount: number, key: string}>) => Promise<void>;
 let fetchLibrary :(libHash: Buffer, retryCount?: number) => Promise<void>;
 let libraries: Dictionary<Buffer,Cell>;
 let getCurTime: () => number;
@@ -66,8 +66,10 @@ describe('Pool migration test', () => {
         currentRoundBorrowers = [];
         prevRoundBorrowers = [];
 
-        fetchStates = async (accounts, retryCount = 5, key?: string) => {
+        fetchStates = async (accounts, opts) => {
             const url = 'https://toncenter.com/api/v3/accountStates?';
+            const key = opts.key;
+            let retryCount = opts.retryCount ?? 5;
 
             do {
                 try {
@@ -183,7 +185,7 @@ describe('Pool migration test', () => {
             }
         }
 
-        await fetchStates([poolAddress, configAddress, electorAddress], apiKey);
+        await fetchStates([poolAddress, configAddress, electorAddress], {key: apiKey});
 
         pool = blockchain.openContract(Pool.createFromAddress(poolAddress));
         config = blockchain.openContract(ConfigTest.createFromAddress(configAddress))
@@ -221,7 +223,7 @@ describe('Pool migration test', () => {
         });
 
 
-        await fetchStates(accountsToFetch, apiKey);
+        await fetchStates(accountsToFetch, {key: apiKey});
     })
 
     it('should be able to set current code', async () => {
