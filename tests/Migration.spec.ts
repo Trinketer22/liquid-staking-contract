@@ -44,6 +44,11 @@ let newControllerCode: Cell;
 let fetchStates: (accounts: Address[], retryCount?: number, key?: string) => Promise<void>;
 let fetchLibrary :(libHash: Buffer, retryCount?: number) => Promise<void>;
 let libraries: Dictionary<Buffer,Cell>;
+let getCurTime: () => number;
+let printMsg: (msg: string) => void;
+
+const verbose = false;
+const apiKey: string | undefined = process.env.API_KEY;
 
 describe('Pool migration test', () => {
     beforeAll(async () => {
@@ -127,9 +132,9 @@ describe('Pool migration test', () => {
                                 data: dataCell
                             }))
                             await writeFile(`states/${accAddress}.state`, JSON.stringify(acc));
-                            console.log(`Account ${accAddress} loaded!`);
+                            printMsg(`Account ${accAddress} loaded!`);
                         } else {
-                            console.log(`Account ${acc.address} is not active!`)
+                            printMsg(`Account ${acc.address} is not active!`)
                         }
                     }
 
@@ -158,7 +163,7 @@ describe('Pool migration test', () => {
                     const resp = await response.json();
                     dataCell = Cell.fromBase64(resp.result.result[0].data);
                     libraries.set(libHash, dataCell);
-                    console.log(`Library ${libHash.toString('base64')} loaded successfully`);
+                    printMsg(`Library ${libHash.toString('base64')} loaded successfully`);
                     return;
                 } catch (error) {
                     if(--retryCount < 0) {
@@ -169,8 +174,16 @@ describe('Pool migration test', () => {
                 }
             } while(true);
         }
+        getCurTime = () => {
+            return blockchain.now ?? Math.floor(Date.now() / 1000);
+        }
+        printMsg = (msg) => {
+            if(verbose) {
+                console.log(msg);
+            }
+        }
 
-        await fetchStates([poolAddress, configAddress, electorAddress]);
+        await fetchStates([poolAddress, configAddress, electorAddress], apiKey);
 
         pool = blockchain.openContract(Pool.createFromAddress(poolAddress));
         config = blockchain.openContract(ConfigTest.createFromAddress(configAddress))
@@ -208,7 +221,7 @@ describe('Pool migration test', () => {
         });
 
 
-        await fetchStates(accountsToFetch);
+        await fetchStates(accountsToFetch, apiKey);
     })
 
     it('should be able to set current code', async () => {
@@ -245,16 +258,17 @@ describe('Pool migration test', () => {
         const electConf = getElectionsConf(confDict);
         const electionsAnnounced = await elector.getActiveElectionId();
         if(electionsAnnounced) {
-            console.log("Elections anounced already!");
+            printMsg("Elections anounced already!");
         } else {
-            console.log("Elections not annouced yet!");
+            printMsg("Elections not annouced yet!");
             const curVset = getVset(confDict, 34);
 
             if(curVset.type !== 'ext') {
                 throw new Error("No way");
             }
-            console.log("Cur time:", blockchain.now);
-            console.log("Vset till:", curVset.utime_unitl);
+            const curTime = getCurTime();
+            printMsg(`Cur time:${curTime}`);
+            printMsg(`Vset till: ${curVset.utime_unitl}`);
             if(blockchain.now! < curVset.utime_unitl) {
                 const nextVset = confDict.get(36);
                 // expect(nextVset).not.toBeUndefined();
@@ -273,7 +287,7 @@ describe('Pool migration test', () => {
                     if(blockchain.now! < nextElectTime) {
                         blockchain.now = nextElectTime + 1;
                     } else {
-                        console.log("Elections can be started at this point")
+                        printMsg("Elections can be started at this point")
                     }
                 }
             }
@@ -283,7 +297,6 @@ describe('Pool migration test', () => {
 
             const newElections = await elector.getActiveElectionId();
             expect(newElections).not.toBe(0);
-            console.log("Elections announced!");
         }
         for(let borrower of prevRoundBorrowers) {
             const controllerData = await borrower.getControllerData();
@@ -301,8 +314,6 @@ describe('Pool migration test', () => {
                 await elector.sendTickTock('tick');
                 await elector.sendTickTock('tock');
             }
-
-            const dataAfter = await borrower.getControllerData();
 
             const withdrawRes = await borrower.sendRecoverStake(validatorSender);
 
@@ -377,6 +388,13 @@ describe('Pool migration test', () => {
         const randomIndexes: Set<number> = new Set();
 
         let i = 0;
+        const confDict = await config.getConfigDict();
+        const electConf = getElectionsConf(confDict);
+        const curVset = getVset(confDict, 34);
+        const curTime = getCurTime();
+        if(curTime < curVset.utime_unitl - electConf.begin_before) {
+            throw new Error("Not started yet")
+        }
 
         do {
             const newIdx = getRandomInt(0, newControllers.length - 1);
@@ -385,6 +403,11 @@ describe('Pool migration test', () => {
                 i++;
                 const testController = newControllers[newIdx];
                 const controllerData = await testController.getControllerData();
+
+                if(curTime < curVset.utime_unitl - electConf.end_before - controllerData.allowedBorrowStartPriorElectionsEnd) {
+                    printMsg(`Allow borrow prior: ${controllerData.allowedBorrowStartPriorElectionsEnd}`);
+                }
+
                 const validatorSender = blockchain.sender(controllerData.validator);
                 await testController.sendUpdateHash(validatorSender);
                 const res = await testController.sendRequestLoan(validatorSender, poolData.minLoan, poolData.minLoan * 2n, poolData.revShare, poolData.revShare);
