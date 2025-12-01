@@ -386,6 +386,7 @@ describe('Pool migration test', () => {
                 const testController = newControllers[newIdx];
                 const controllerData = await testController.getControllerData();
                 const validatorSender = blockchain.sender(controllerData.validator);
+                await testController.sendUpdateHash(validatorSender);
                 const res = await testController.sendRequestLoan(validatorSender, poolData.minLoan, poolData.minLoan * 2n, poolData.revShare, poolData.revShare);
                 expect(res.transactions).toHaveTransaction({
                     on: testController.address,
