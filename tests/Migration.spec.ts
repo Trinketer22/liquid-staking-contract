@@ -48,6 +48,7 @@ let getCurTime: () => number;
 let printMsg: (msg: string) => void;
 
 const verbose = false;
+const saveStates = false;
 const apiKey: string | undefined = process.env.API_KEY;
 
 describe('Pool migration test', () => {
@@ -133,7 +134,9 @@ describe('Pool migration test', () => {
                                 code: codeCell,
                                 data: dataCell
                             }))
-                            await writeFile(`states/${accAddress}.state`, JSON.stringify(acc));
+                            if(saveStates) {
+                                await writeFile(`states/${accAddress}.state`, JSON.stringify(acc));
+                            }
                             printMsg(`Account ${accAddress} loaded!`);
                         } else {
                             printMsg(`Account ${acc.address} is not active!`)
