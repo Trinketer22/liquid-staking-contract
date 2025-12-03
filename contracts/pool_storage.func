@@ -81,6 +81,7 @@ builder save_minters_data(builder pb) inline {
       b = b.store_bool(false);
     } else {
       b = b.store_bool(true);
+      ;; 267 is size of the internal address and 124 max size of coins
       if(b.builder_bits() > 1023 - 267 - 124) {
         b = b.store_bool(true) ;;Either ^X
               .store_ref(

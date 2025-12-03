@@ -381,7 +381,7 @@ int muldiv_extra(int a, int b, int c) inline {
         ;; it is ok, controller know how to process loan_repayment/request_loan bounces
         {- ========== Pool operations ========== -}
         if (op == pool::deposit) {
-                ;; we do not end_parse here, because apps may use
+                ;; we do not end_parse here, because apps use
                 ;; unprocessed data in depositd message for offchain analytics
                 assert_state!(state::NORMAL);
                 [int optimistic_deposit_withdrawals,
@@ -392,15 +392,16 @@ int muldiv_extra(int a, int b, int c) inline {
                 throw_unless(error::deposits_are_closed, deposits_open?);
                 raw_reserve(balance - DEPOSIT_FEE - sent_during_rotation, reservemode::STRICT);
                 int deposit_amount = msg_value - DEPOSIT_FEE;
+                ;; Note DEPOSIT_FEE is not deducted from user. It is used as "gas buffer" that ensures
+                ;; that all operations will finish successfully. Excesses of this buffer are returned to user
                 throw_unless(error::deposit_amount_too_low, deposit_amount > 0);
                 if(optimistic_deposit_withdrawals) {
                     ;; we convert TON to Jetton at projected (expected) price at the round end
                     (int expected_balance, int expected_supply) = _get_projected_conversion_ratio();
-
                     int amount = muldiv_extra(deposit_amount, expected_supply, expected_balance);
                     throw_unless(error::output_amount_is_zero, amount);
                     request_to_mint_pool_jettons(sender_address, amount, query_id, true);
-                    total_balance += deposit_amount;
+                    total_balance += deposit_amount; ;; supply also updated in request_to_mint_pool_jettons
                 } else {
                     request_to_mint_deposit(sender_address, deposit_amount, query_id);
                 }
@@ -417,7 +418,7 @@ int muldiv_extra(int a, int b, int c) inline {
 
               int min_loan = in_msg_body~load_coins();
               int max_loan = in_msg_body~load_coins();
-              int max_interest = in_msg_body~load_share();
+              int max_interest = in_msg_body~load_share(); ;; max_rev_share for pool::request_loan2
               slice static_data = in_msg_body;
               in_msg_body = in_msg_body.preload_ref().begin_parse();
               int controller_id = in_msg_body~load_controller_id();
@@ -453,7 +454,7 @@ int muldiv_extra(int a, int b, int c) inline {
                       throw(error::unknown_op);
                   }
 
-                  ;; if rev_share is set, we are interpreting max_interest as max_rev_share
+                  ;; if rev_share is set, we are interpreting incoming max_interest as max_rev_share
                   int max_rev_share = max_interest;
                   throw_unless(error::interest_too_low, max_rev_share >= rev_share);
 
@@ -491,7 +492,9 @@ int muldiv_extra(int a, int b, int c) inline {
                         msgflag::NON_BOUNCEABLE, sendmode::REGULAR);
 
         } elseif (op == pool::loan_repayment) {
-            ;; we expect loans from previous round only
+            ;; we can get repayment from both rounds: in normal situation from prev round, but
+            ;; if for instance controller didn't participated in election it may and should 
+            ;; return funds immediately.
             ;; note, close_loan finalize round if last loan is closed
             (int closed, int last_one) = prev_round_borrowers~close_loan(sender_address, msg_value);
             ifnot (closed) {
@@ -641,6 +644,7 @@ int muldiv_extra(int a, int b, int c) inline {
     throw_unless(error::finalizing_active_credit_round, active_borrowers == 0);
 
     ;; pool initializes with supply = 0, set withdrawal_rate_prev2_x24 = 0 in this case
+    ;; here we update NEW withdrawal_rate
     var withdrawal_rate_prev2_x24 = 0;
     if (supply != 0) {
         withdrawal_rate_prev2_x24 = muldiv(total_balance, SHARE_BASIS, supply);
@@ -679,7 +683,6 @@ int muldiv_extra(int a, int b, int c) inline {
 
     finalize_deposit_withdrawal_round(available_balance, round_id);
 
-    ;; do we need to nulify data here ???
     return [null(), current_round_index() + 1, 0, 0, 0, 0, 0, withdrawal_rate_prev2_x24];
 }
 
