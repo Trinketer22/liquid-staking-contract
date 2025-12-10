@@ -20,6 +20,7 @@ const int jetton_transfer_notification_value = ONE_COIN / 100;
 const int burn_request_value = ONE_COIN / 100;
 const int start_distribution_gas_usage = ONE_COIN / 100;
 
+const int SHARD_DEPTH = 8;
 
 ;; storage scheme
 ;; storage#_ issued_bills:Coins
@@ -78,13 +79,25 @@ cell calculate_nft_item_state_init(int item_index, cell nft_item_code) {
                  .store_slice(my_address())
                  .store_uint(item_index, 64)
               .end_cell();
-  return begin_cell().store_uint(0, 2).store_dict(nft_item_code).store_dict(data).store_uint(0, 1).end_cell();
+  return begin_cell()
+          .store_uint(1, 1) ;; ;; Use fixed_prefix_length;
+          .store_uint(SHARD_DEPTH, 5)
+          .store_uint(0, 1) ;;  No special
+          .store_dict(nft_item_code)
+          .store_dict(data)
+          .store_uint(0, 1)
+         .end_cell();
 }
 
 slice calculate_nft_item_address(cell state_init) {
-  return begin_cell().store_uint(4, 3)
-                     .store_workchain(BASECHAIN) ;; wc
-                     .store_uint(cell_hash(state_init), 256)
+    (_, int prefix) = parse_std_addr(my_address());
+    prefix = prefix >> (256 - SHARD_DEPTH);
+    int mask = (1 << (256 - SHARD_DEPTH)) - 1;
+    int suffix = state_init.cell_hash() & mask;
+    return begin_cell().store_uint(4, 3)
+                       .store_workchain(BASECHAIN) ;; wc
+                       .store_uint(prefix, SHARD_DEPTH)
+                       .store_uint(suffix, 256 - SHARD_DEPTH)
                      .end_cell()
                      .begin_parse();
 }

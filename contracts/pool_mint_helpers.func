@@ -36,7 +36,7 @@
     if(deposit_payout.null?()) {
         ;; we need to deploy new minter
         cell state_init = calculate_payout_state_init(my_address(), current_round_index(), true);
-        slice to_address = calc_address(JETTONS_WORKCHAIN, state_init);
+        slice to_address = calc_address_sharded(JETTONS_WORKCHAIN, state_init);
         deposit_payout = to_address;
         slice deposit_minter_jetton_wallet = calc_address(JETTONS_WORKCHAIN,
                 calculate_jetton_wallet_state_init(to_address, jetton_minter, child_contract_codes.triple_second())
@@ -70,7 +70,7 @@
     if(withdrawal_payout.null?()) {
         ;; we need to deploy new minter
         cell state_init = calculate_payout_state_init(my_address(), current_round_index(), false);
-        slice to_address = calc_address(JETTONS_WORKCHAIN, state_init);
+        slice to_address = calc_address_sharded(JETTONS_WORKCHAIN, state_init);
         withdrawal_payout = to_address;
         builder msg = begin_cell()
                 .store_msg_flags(msgflag::BOUNCEABLE)

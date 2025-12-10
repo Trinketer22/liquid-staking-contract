@@ -2,6 +2,8 @@
 #include "types.func";
 #include "auto/metadata.func";
 
+const int SHARD_DEPTH = 8;
+
 ;; [controller_code, pool_jetton_wallet_code, payout_minter_code]
 global [cell, cell, cell] child_contract_codes;
 
@@ -55,6 +57,23 @@ slice calc_address(int workchain, cell state_init) inline {
             .begin_parse();
 }
 
+;; address with fixed_prefix equal to my_address() prefix
+slice calc_address_sharded(int workchain, cell state_init) inline {
+    (_, int prefix) = parse_std_addr(my_address());
+    prefix = prefix >> (256 - SHARD_DEPTH);
+    int mask = (1 << (256 - SHARD_DEPTH)) - 1;
+    int suffix = state_init.cell_hash() & mask;
+    
+
+    return begin_cell().store_uint(4, 3) ;; 0x100 : $10 + anycast (Maybe = 0)
+            .store_workchain(workchain)
+            .store_uint(prefix, SHARD_DEPTH)
+            .store_uint(suffix, 256 - SHARD_DEPTH)
+            .end_cell()
+            .begin_parse();
+}
+
+
 global slice consigliere;
 
 cell calculate_payout_state_init(slice pool_address, int round_id, int distributing_jettons?) {
@@ -85,7 +104,9 @@ cell calculate_payout_state_init(slice pool_address, int round_id, int distribut
             .store_ref(onchain_content)       ;; Content
            .end_cell();
   return begin_cell()
-            .store_uint(0, 1 + 1) ;; split_depth (Maybe = 0) and special (Maybe = 0)
+            .store_uint(1, 1) ;; ;; Use fixed_prefix_length;
+            .store_uint(SHARD_DEPTH, 5)
+            .store_uint(0, 1) ;;  No special
             .store_maybe_ref(child_contract_codes.triple_third())
             .store_maybe_ref(data)
             .store_uint(0,1) ;; libraries - empty cell
