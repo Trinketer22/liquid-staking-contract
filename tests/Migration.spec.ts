@@ -1,15 +1,16 @@
 import '@ton/test-utils';
-import { Blockchain, createShardAccount, SandboxContract, TreasuryContract } from '@ton/sandbox';
+import { Blockchain, BlockchainSnapshot, createShardAccount, internal, SandboxContract, TreasuryContract } from '@ton/sandbox';
 import { Address, beginCell, Cell, Dictionary, toNano  } from '@ton/core';
 import { Pool } from '../wrappers/Pool';
 import { ConfigTest } from '../wrappers/ConfigTest';
 import { compile } from '@ton/blueprint';
 import { Controller } from '../wrappers/Controller';
-import { Conf, ControllerState, Op } from '../PoolConstants';
+import { Conf, Op } from '../PoolConstants';
 import { ElectorTest } from '../wrappers/ElectorTest';
-import { parseValidatorsSet, getElectionsConf, getVset } from '../wrappers/ValidatorUtils';
+import { parseValidatorsSet, getElectionsConf, getVset, getStakeConf, getValidatorsConf } from '../wrappers/ValidatorUtils';
 import {writeFile} from 'fs/promises';
 import { getRandomInt } from '../utils';
+import { getSecureRandomBytes, keyPairFromSeed } from 'ton-crypto';
 
 
 type AccountState = {
@@ -45,7 +46,9 @@ let fetchStates: (accounts: Address[], opts: Partial<{ retryCount: number, key: 
 let fetchLibrary :(libHash: Buffer, retryCount?: number) => Promise<void>;
 let libraries: Dictionary<Buffer,Cell>;
 let getCurTime: () => number;
-let printMsg: (msg: string) => void;
+let printMsg: (...data: any[]) => void;
+let mockRound:(profit: bigint) => Promise<void>;
+let announceElections:() => Promise<number>;
 
 const verbose = false;
 const saveStates = false;
@@ -179,12 +182,128 @@ describe('Pool migration test', () => {
                 }
             } while(true);
         }
+        announceElections = async () => {
+            const confDict = await config.getConfigDict();
+            const electConf = getElectionsConf(confDict);
+            const electAt = await elector.getActiveElectionId();
+            const curTime = getCurTime();
+            const curVset = getVset(blockchain.config, 34);
+            // printMsg("Elect conf:", electConf);
+            const electBegin = curVset.utime_unitl - electConf.begin_before;
+            const electEnd   = curVset.utime_unitl - electConf.end_before;
+            const nextVset = confDict.get(36);
+            if(curTime > electEnd) {
+                printMsg(`Elections already ended`);
+            }
+            if(electAt >= electBegin && curTime < electEnd) {
+                printMsg("Elections anounced already!");
+                printMsg(`Announced at: ${electAt}, Should begin ${electBegin}`);
+                printMsg(`Delta ${curTime - electBegin}`);
+                return electAt;
+            } else if(!nextVset) {
+                printMsg("Next vset is not present")
+                blockchain.now = (curTime < electBegin ? electBegin: electAt) + 1;
+                await elector.sendTickTock("tick");
+                await elector.sendTickTock("tock");
+            } else {
+                printMsg("Elections not annouced yet!");
+
+                if(curVset.type !== 'ext') {
+                    throw new Error("No way");
+                }
+                printMsg(`Cur time:${curTime}`);
+                printMsg(`Vset till: ${curVset.utime_unitl}`);
+                if(curTime < curVset.utime_unitl) {
+                    // expect(nextVset).not.toBeUndefined();
+                    const nextVsetParsed = parseValidatorsSet(nextVset.beginParse());
+                    printMsg("Updating next vset");
+                    if(nextVsetParsed.type !== 'ext') {
+                        throw new Error("ext new vset expected!")
+                    }
+                    blockchain.now = nextVsetParsed.utime_since;
+                    await config.sendTickTock('tick');
+                    await config.sendTickTock('tock');
+                    const newConfig = await config.getConfigDict();
+                    expect(newConfig.get(36)).toBeUndefined();
+                    blockchain.setConfig(await config.getConfigCell())
+                    blockchain.now = nextVsetParsed.utime_unitl - electConf.begin_before + 1;
+                }
+            }
+            await elector.sendTickTock("tick");
+            await elector.sendTickTock("tock");
+
+            const newElections = await elector.getActiveElectionId();
+            expect(newElections).not.toBe(0);
+            return newElections;
+        }
+        mockRound = async(profit) => {
+            const confDict = await config.getConfigDict();
+            const vConf = getValidatorsConf(confDict);
+            const stakeConf = getStakeConf(confDict);
+            const electConf = getElectionsConf(confDict);
+            const elect = await elector.getElections();
+            const participants = elect.members;
+            let totalStake = elect.totalStake;
+            let totalParticipants = participants.size;
+            printMsg("Initial participants:", totalParticipants)
+            let mockValidators = await blockchain.createWallets(100, {workchain: -1, balance: toNano('10000000')});
+            const roundIdx = await elector.getActiveElectionId();
+            let vdIdx = 0;
+
+            await blockchain.sendMessage(internal({
+                from: new Address(-1, Buffer.alloc(32, 0)),
+                to: elector.address,
+                value: profit,
+                bounce: false
+            }));
+
+            while(totalParticipants < vConf.min_validators || totalStake < stakeConf.min_total_stake) {
+                const keyPair = keyPairFromSeed(await getSecureRandomBytes(32))
+                const curValidator = mockValidators[vdIdx++];
+                const stakeSize = toNano('1000000');
+                const res = await elector.sendNewStake(curValidator.getSender(), stakeSize, curValidator.address, keyPair.publicKey, keyPair.secretKey, roundIdx);
+                // printMsg(`Validator ${vdIdx} is staking...`);
+
+                expect(res.transactions).toHaveTransaction({
+                    on: curValidator.address,
+                    from: elector.address,
+                    op: Op.elector.new_stake_ok
+                });
+                const electAfter = await elector.getElections();
+
+                // printMsg("Ok");
+                totalStake = electAfter.totalStake;
+                totalParticipants++;
+            }
+            // Set time to elect_at
+            blockchain.now = roundIdx;
+            const vsetUpd = await elector.sendTickTock("tick");
+            expect(vsetUpd.transactions).toHaveTransaction({
+                on: config.address,
+                from: elector.address,
+                aborted: false
+            });
+            blockchain.setConfig(await config.getConfigCell());
+            const nextVset = getVset(blockchain.config, 36);
+
+            if(getCurTime() < nextVset.utime_since) {
+                printMsg("Updating vset time")
+                blockchain.now = nextVset.utime_since;
+            }
+
+            await config.sendTickTock("tock");
+            const configAfter = await config.getConfigCell();
+            expect(blockchain.config).not.toEqualCell(configAfter);
+            await elector.sendTickTock("tick");
+            await elector.sendTickTock("tock");
+            blockchain.setConfig(configAfter);
+        }
         getCurTime = () => {
             return blockchain.now ?? Math.floor(Date.now() / 1000);
         }
-        printMsg = (msg) => {
+        printMsg = (...msg) => {
             if(verbose) {
-                console.log(msg);
+                console.log(...msg);
             }
         }
 
@@ -208,7 +327,6 @@ describe('Pool migration test', () => {
         if(poolData.withdrawalPayout) {
             accountsToFetch.push(poolData.withdrawalPayout);
         }
-
 
         const parseBorrower = (k: bigint) => {
             const controllerAddress = new Address(-1, Buffer.from(k.toString(16).padStart(64, '0'), 'hex'));
@@ -261,64 +379,60 @@ describe('Pool migration test', () => {
     it('should be able to close previous round', async () => {
         const confDict = await config.getConfigDict();
         const electConf = getElectionsConf(confDict);
-        const electionsAnnounced = await elector.getActiveElectionId();
-        if(electionsAnnounced) {
-            printMsg("Elections anounced already!");
-        } else {
-            printMsg("Elections not annouced yet!");
-            const curVset = getVset(confDict, 34);
 
-            if(curVset.type !== 'ext') {
-                throw new Error("No way");
-            }
-            const curTime = getCurTime();
-            printMsg(`Cur time:${curTime}`);
-            printMsg(`Vset till: ${curVset.utime_unitl}`);
-            if(blockchain.now! < curVset.utime_unitl) {
-                const nextVset = confDict.get(36);
-                // expect(nextVset).not.toBeUndefined();
-                if(nextVset) {
-                    const nextVsetParsed = parseValidatorsSet(nextVset.beginParse());
-                    if(nextVsetParsed.type !== 'ext') {
-                        throw new Error("ext new vset expected!")
-                    }
-                    blockchain.now = nextVsetParsed.utime_since;
-                    await config.sendTickTock('tick');
-                    await config.sendTickTock('tock');
-                    const newConfig = await config.getConfigDict();
-                    expect(newConfig.get(36)).toBeUndefined();
-                } else {
-                    const nextElectTime = curVset.utime_unitl - electConf.begin_before
-                    if(blockchain.now! < nextElectTime) {
-                        blockchain.now = nextElectTime + 1;
-                    } else {
-                        printMsg("Elections can be started at this point")
-                    }
-                }
-            }
-
-            await elector.sendTickTock("tick");
-            await elector.sendTickTock("tock");
-
-            const newElections = await elector.getActiveElectionId();
-            expect(newElections).not.toBe(0);
-        }
+        const curElections = await announceElections();
+        printMsg(`Elections close round:${curElections}`);
+        let prevRoundCurrentlyValidating = false;
+        let waitUnfreeze = false;
         for(let borrower of prevRoundBorrowers) {
             const controllerData = await borrower.getControllerData();
             const validatorSender = blockchain.sender(controllerData.validator);
-            let changeTime = controllerData.validatorSetChangeTime;
+            // console.log("Change count:", controllerData.validatorSetChangeCount);
 
             if(controllerData.validatorSetChangeCount < 2) {
-                const res = await borrower.sendUpdateHash(validatorSender);
-                changeTime = res.transactions[0].now;
+                await borrower.sendUpdateHash(validatorSender);
+                const afterUpdate = await borrower.getControllerData();
+                if(afterUpdate.validatorSetChangeCount == controllerData.validatorSetChangeCount) {
+                    prevRoundCurrentlyValidating = true;
+                }
             }
+        }
+        if(prevRoundCurrentlyValidating) {
+            printMsg(`Prev round borrowers are currently validating`);
+            await mockRound(toNano('10000'));
+            // Announce next elections
+            const nextElections = await announceElections();
+            expect(nextElections).toBeGreaterThan(curElections);
+            blockchain.setConfig(await config.getConfigCell());
+            // borrowTime = blockchain.snapshot();
+        }
+        let lastSetChanged = 0;
+        for(const borrower of prevRoundBorrowers) {
+            const curData = await borrower.getControllerData();
+            const validatorSender = blockchain.sender(curData.validator);
+            await borrower.sendUpdateHash(validatorSender);
+            const dataAfter = await borrower.getControllerData();
+            lastSetChanged = Math.max(dataAfter.validatorSetChangeTime);
+            // console.log("Last state changed:", lastSetChanged);
+        }
 
-            const unfreezeAt = changeTime + electConf.stake_held_for + 61;
-            if(blockchain.now! < unfreezeAt) {
-                blockchain.now = unfreezeAt;
-                await elector.sendTickTock('tick');
-                await elector.sendTickTock('tock');
-            }
+        const unfreezeAt = lastSetChanged + electConf.stake_held_for + 61;
+        const curVset  = getVset(blockchain.config, 34);
+        if(curVset.utime_unitl < unfreezeAt) {
+            printMsg("Go next round");
+            await mockRound(toNano('10000'));
+        } else if(blockchain.now! < unfreezeAt) {
+            printMsg("Wait unfreeze")
+            waitUnfreeze = true;
+            blockchain.now = unfreezeAt;
+            await elector.sendTickTock('tick');
+            await elector.sendTickTock('tock');
+            await config.sendTickTock('tock');
+        }
+
+        for(let borrower of prevRoundBorrowers) {
+            const curData = await borrower.getControllerData();
+            const validatorSender = blockchain.sender(curData.validator);
 
             const withdrawRes = await borrower.sendRecoverStake(validatorSender);
 
@@ -334,7 +448,10 @@ describe('Pool migration test', () => {
                 op: Op.pool.loan_repayment,
                 aborted: false
             })
+
         }
+
+        blockchain.setConfig(await config.getConfigCell());
         const poolAfter = await pool.getFullData();
         // Round rotated
         expect(poolAfter.currentRound.borrowed).toBe(0n);
@@ -388,15 +505,28 @@ describe('Pool migration test', () => {
         expect(poolAfter.instantWithdrawalFee).toEqual(poolData.instantWithdrawalFee);
     })
     it('should be able to borrow with new controllers', async () => {
+        // blockchain.setConfig(await config.getConfigCell());
+        await pool.sendTouch(testWalelt.getSender());
         const poolData = await pool.getFullData();
         // Pick random 10 new controller to borrow
         const randomIndexes: Set<number> = new Set();
+        const confDict = await config.getConfigDict();
+
+        const curElections = await announceElections();
+        printMsg(`New borrow elections: ${curElections}`)
+        blockchain.setConfig(await config.getConfigCell());
+        //console.log(`Cur time:`, getCurTime())
+        // Self test
+        expect(getVset(blockchain.config, 34)).toEqual(getVset(await config.getConfigDict(), 34));
+        //console.log(`Cur vset:`, getVset(blockchain.config, 34));
+        //console.log(`Cur vset config:`, getVset(await config.getConfigDict(), 34));
+
 
         let i = 0;
-        const confDict = await config.getConfigDict();
         const electConf = getElectionsConf(confDict);
         const curVset = getVset(confDict, 34);
         const curTime = getCurTime();
+        printMsg(`End of elections: ${curVset.utime_unitl - electConf.end_before - curTime} cur time ${curTime}`)
         if(curTime < curVset.utime_unitl - electConf.begin_before) {
             throw new Error("Not started yet")
         }
@@ -405,13 +535,9 @@ describe('Pool migration test', () => {
             const newIdx = getRandomInt(0, newControllers.length - 1);
             if(!randomIndexes.has(newIdx)) {
                 randomIndexes.add(newIdx);
-                i++;
+                printMsg(`Borrowing ${i++}`);
                 const testController = newControllers[newIdx];
                 const controllerData = await testController.getControllerData();
-
-                if(curTime < curVset.utime_unitl - electConf.end_before - controllerData.allowedBorrowStartPriorElectionsEnd) {
-                    printMsg(`Allow borrow prior: ${controllerData.allowedBorrowStartPriorElectionsEnd}`);
-                }
 
                 const validatorSender = blockchain.sender(controllerData.validator);
                 await testController.sendUpdateHash(validatorSender);
