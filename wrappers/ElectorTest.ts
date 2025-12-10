@@ -1,8 +1,15 @@
 import { Elector } from './Elector';
-import { Address, Cell, beginCell, Dictionary } from '@ton/core';
+import { Address, Cell, beginCell, Dictionary, ContractProvider, DictionaryValue } from '@ton/core';
 import { loadConfig, getStakeConf, packElect, getElectionsConf } from './ValidatorUtils';
 import { Blockchain, BlockchainContractProvider, SandboxContractProvider, TickOrTock } from '@ton/sandbox';
 
+type ParticipantInfo = {
+    stake: bigint,
+    stake_at: number,
+    max_factor: number,
+    src_addr: Buffer,
+    adnl_addr: Buffer
+}
 export class ElectorTest extends Elector {
   constructor(readonly address: Address, readonly init?: { code: Cell; data: Cell, special:{tick:boolean, tock:boolean} }) {
     super(address, init);
@@ -56,5 +63,41 @@ export class ElectorTest extends Elector {
   async sendTickTock(provider: SandboxContractProvider, which: TickOrTock) {
     await provider.tickTock(which);
   }
-
+  async getElections(provider: SandboxContractProvider) {
+    const state = await provider.getState();
+    if(state.state.type !== 'active') {
+        throw new Error("Elector is not active!");
+    }
+    const dataCell = Cell.fromBoc(state.state.data!)[0];
+    const electCell = dataCell.beginParse().preloadMaybeRef();
+    if(!electCell) {
+        throw new Error(`Failed to get elect cell`);
+    }
+    const participantInfo: () => DictionaryValue<ParticipantInfo> = () => {
+        return {
+            serialize(src, builder) {
+                throw new Error("Serialize not implemented!")
+            },
+            parse(slice) {
+                return {
+                    stake: slice.loadCoins(),
+                    stake_at: slice.loadUint(32),
+                    max_factor: slice.loadUint(32),
+                    src_addr: slice.loadBuffer(32),
+                    adnl_addr: slice.loadBuffer(32)
+                }
+            }
+        }
+    }
+    const ds = electCell.beginParse();
+    return {
+        electId: ds.loadUint(32),
+        electClose: ds.loadUint(32),
+        minStake: ds.loadCoins(),
+        totalStake: ds.loadCoins(),
+        members: ds.loadDict(Dictionary.Keys.BigUint(256), participantInfo()),
+        finised: ds.loadBit(),
+        failed: ds.loadBit()
+    }
+  }
 }

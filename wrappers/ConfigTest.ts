@@ -19,6 +19,4 @@ export class ConfigTest extends Config {
   async sendTickTock(provider: SandboxContractProvider, which: TickOrTock) {
     return await provider.tickTock(which);
   }
-
-
 }

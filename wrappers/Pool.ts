@@ -706,7 +706,7 @@ export class Pool implements Contract {
         let res = await this.getFullData(provider);
         return res.currentRound.roundId;
     }
-    async getBorrowersDict(provider: ContractProvider, previous=false) {
+    async getBorrowersDict(provider: ContractProvider, previous=false): Promise<Dictionary<bigint, BorrowerDiscription>> {
        let res = await this.getFullData(provider);
        let borrowers = res.currentRound.borrowers;
         if(previous) {
@@ -715,7 +715,7 @@ export class Pool implements Contract {
         if (borrowers == null) {
             return Dictionary.empty();
         }
-        const dict = Dictionary.loadDirect(Dictionary.Keys.BigInt(256), BorrowerDiscriptionValue, borrowers.asSlice());
+        const dict = Dictionary.loadDirect(Dictionary.Keys.BigUint(256), BorrowerDiscriptionValue, borrowers.asSlice());
         return dict;
     }
 
@@ -733,7 +733,16 @@ export class Pool implements Contract {
 
       return stack.readAddress();
     }
+    async getPoolCode(provider: ContractProvider) {
+        const res = await provider.getState();
+        if(res.state.type !== 'active') {
+            throw new Error(`Pool contract is not active`)
+        }
+    }
     async getFullData(provider: ContractProvider) {
+        let prvWithdrawRatePrev2X24 = 0n;
+        let curWithdrawRatePrev2X24 = 0n;
+
         let { stack } = await provider.get('get_pool_full_data', []);
         let contract_version = stack.remaining == 34 ? 2 : stack.remaining == 35 ? 3 : 1;
         let state = stack.readNumber() as State;
@@ -760,7 +769,9 @@ export class Pool implements Contract {
         let prvExpected = prv.readBigNumber();
         let prvReturned = prv.readBigNumber();
         let prvProfit = prv.readBigNumber();
-        let prvWithdrawRatePrev2X24 = prv.readBigNumber();
+        if(contract_version >= 3) {
+            prvWithdrawRatePrev2X24 = prv.readBigNumber();
+        }
         let previousRound = {
           borrowers: prvBorrowers,
           roundId: prvRoundId,
@@ -780,7 +791,9 @@ export class Pool implements Contract {
         let curExpected = cur.readBigNumber();
         let curReturned = cur.readBigNumber();
         let curProfit = cur.readBigNumber();
-        let curWithdrawRatePrev2X24 = cur.readBigNumber();
+        if(contract_version >= 3) {
+            curWithdrawRatePrev2X24 = cur.readBigNumber();
+        }
         let currentRound = {
           borrowers: curBorrowers,
           roundId: curRoundId,
@@ -832,6 +845,7 @@ export class Pool implements Contract {
         let projectedPoolSupply = stack.readBigNumber();
 
         return {
+            contract_version,
             state, halted,
             totalBalance, interestRate,
             optimisticDepositWithdrawals, depositsOpen, instantWithdrawalFee, revShare,
@@ -862,6 +876,9 @@ export class Pool implements Contract {
     }
 
     async getFullDataRaw(provider: ContractProvider) {
+
+        let prvWithdrawRatePrev2X24 = 0n;
+        let curWithdrawRatePrev2X24 = 0n;
         let { stack } = await provider.get('get_pool_full_data_raw', []);
         let contract_version = stack.remaining == 34 ? 2 : stack.remaining == 35 ? 3 : 1;
         let state = stack.readNumber() as State;
@@ -888,7 +905,9 @@ export class Pool implements Contract {
         let prvExpected = prv.readBigNumber();
         let prvReturned = prv.readBigNumber();
         let prvProfit = prv.readBigNumber();
-        let prvWithdrawRatePrev2X24 = prv.readBigNumber();
+        if(contract_version >= 3) {
+            prvWithdrawRatePrev2X24 = prv.readBigNumber();
+        }
         let previousRound = {
             borrowers: prvBorrowers,
             roundId: prvRoundId,
@@ -908,7 +927,9 @@ export class Pool implements Contract {
         let curExpected = cur.readBigNumber();
         let curReturned = cur.readBigNumber();
         let curProfit = cur.readBigNumber();
-        let curWithdrawRatePrev2X24 = cur.readBigNumber();
+        if(contract_version >= 3) {
+            curWithdrawRatePrev2X24 = cur.readBigNumber();
+        }
         let currentRound = {
             borrowers: curBorrowers,
             roundId: curRoundId,
@@ -960,6 +981,7 @@ export class Pool implements Contract {
         let projectedPoolSupply = stack.readBigNumber();
 
         return {
+            contract_version,
             state, halted,
             totalBalance, interestRate,
             optimisticDepositWithdrawals, depositsOpen, instantWithdrawalFee, revShare,

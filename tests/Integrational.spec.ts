@@ -189,6 +189,9 @@ describe('Integrational tests', () => {
 
         const confDict = loadConfig(bc.config);
 
+        // Clear config 36, so elections can be announced regardless of default config state
+        confDict.delete(36);
+
         sConf = getStakeConf(confDict);
         vConf = getValidatorsConf(confDict);
         eConf = getElectionsConf(confDict);
