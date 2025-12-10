@@ -525,7 +525,7 @@ export class Txiterator implements AsyncIterator<BlockchainTransaction>  {
         if(inMsg.info.type !== "internal")
             throw(Error("Internal only"));
         const smc = await this.blockchain.getContract(inMsg.info.dest);
-        const res = smc.receiveMessage(inMsg, {now: this.blockchain.now});
+        const res = await smc.receiveMessage(inMsg, {now: this.blockchain.now});
         const bcRes = {
             ...res,
             events: extractEvents(res),
