@@ -135,7 +135,7 @@ int muldiv_extra(int a, int b, int c) inline {
     return muldiv(a, b, c);
 }
 
-() update_round(int available_balance) impure inline_ref {
+() update_round(int contract_balance) impure inline_ref {
     sent_during_rotation = 0;
     if(halted?) {
         return ();
@@ -151,7 +151,7 @@ int muldiv_extra(int a, int b, int c) inline {
             return ();
         }
         untouched_data = null();
-        var new_round_borrowers = prev_round_borrowers.finalize_lending_round(available_balance);
+        var new_round_borrowers = prev_round_borrowers.finalize_lending_round(contract_balance);
 
         saved_validator_set_hash = current_hash;
         int round_index = current_round_index() + 1;
@@ -204,7 +204,7 @@ int muldiv_extra(int a, int b, int c) inline {
             update_round(pair_first(get_balance()) - msg_value);
             assert_not_halted!(); ;; otherwise mint back
 
-            int available_funds = balance - msg_value - MIN_TONS_FOR_STORAGE - sent_during_rotation;
+            int available_funds = balance - msg_value - MIN_TONS_FOR_STORAGE - sent_during_rotation - accrued_governance_fee;
             [int optimistic_deposit_withdrawals,
              _, int instant_withdrawal_fee, int rev_share] = deposit_withdrawal_parameters;
 
@@ -636,7 +636,7 @@ int muldiv_extra(int a, int b, int c) inline {
     return (borrowers_data, (true, last_one));
 }
 
-[cell, int, int, int, int, int, int, int] finalize_lending_round([cell, int, int, int, int, int, int, int] borrowers_data, int available_balance) impure {
+[cell, int, int, int, int, int, int, int] finalize_lending_round([cell, int, int, int, int, int, int, int] borrowers_data, int contract_balance) impure {
     ;; Does all the necessary value checks, sends logs
     ;; and governor fees, nullifies variables.
     var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit, withdrawal_rate_prev2_x24] = borrowers_data;
@@ -681,7 +681,7 @@ int muldiv_extra(int a, int b, int c) inline {
              msgflag::NON_BOUNCEABLE, sendmode::REGULAR);
     log_round_completion(round_id, borrowed, returned, profit, total_balance, supply);
 
-    finalize_deposit_withdrawal_round(available_balance, round_id);
+    finalize_deposit_withdrawal_round(contract_balance, round_id);
 
     return [null(), current_round_index() + 1, 0, 0, 0, 0, 0, withdrawal_rate_prev2_x24];
 }
@@ -710,7 +710,8 @@ int muldiv_extra(int a, int b, int c) inline {
     emit_log(4, begin_cell().store_uint(round_id, 32));
 }
 
-() finalize_deposit_withdrawal_round (int available_balance, int round_id) impure {
+() finalize_deposit_withdrawal_round (int contract_balance, int round_id) impure {
+    int available_balance = contract_balance - sent_during_rotation - accrued_governance_fee;
     initiate_distribution_of_tons(available_balance, round_id);
     initiate_distribution_of_pool_jettons(round_id);
 }
