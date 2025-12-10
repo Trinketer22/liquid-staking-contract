@@ -457,7 +457,7 @@ describe('Controller & Pool', () => {
                 op: Op.interestManager.stats, // interest_manager::stats
                 body: (x) => {
                     let s = x!.beginParse();
-                    s.loadUint(32 + 64); // op, query id
+                    s.loadUintBig(32 + 64); // op, query id
                     let borrowed = s.loadCoins();
                     return borrowed == 0n; // there were no previous "previous borrowers"
                 }
