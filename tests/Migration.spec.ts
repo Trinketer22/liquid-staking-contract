@@ -197,12 +197,12 @@ describe('Pool migration test', () => {
             }
             if(electAt >= electBegin && curTime < electEnd) {
                 printMsg("Elections anounced already!");
-                printMsg(`Announced at: ${electAt}, Should begin ${electBegin}`);
+                printMsg(`End at: ${electAt}, began at ${electBegin}`);
                 printMsg(`Delta ${curTime - electBegin}`);
                 return electAt;
             } else if(!nextVset) {
                 printMsg("Next vset is not present")
-                blockchain.now = (curTime < electBegin ? electBegin: electAt) + 1;
+                blockchain.now = (curTime < electBegin ? electBegin : electAt) + 1;
                 await elector.sendTickTock("tick");
                 await elector.sendTickTock("tock");
             } else {
@@ -412,7 +412,7 @@ describe('Pool migration test', () => {
             const validatorSender = blockchain.sender(curData.validator);
             await borrower.sendUpdateHash(validatorSender);
             const dataAfter = await borrower.getControllerData();
-            lastSetChanged = Math.max(dataAfter.validatorSetChangeTime);
+            lastSetChanged = Math.max(lastSetChanged, dataAfter.validatorSetChangeTime);
             // console.log("Last state changed:", lastSetChanged);
         }
 
@@ -421,7 +421,7 @@ describe('Pool migration test', () => {
         if(curVset.utime_unitl < unfreezeAt) {
             printMsg("Go next round");
             await mockRound(toNano('10000'));
-        } else if(blockchain.now! < unfreezeAt) {
+        } else if(getCurTime() < unfreezeAt) {
             printMsg("Wait unfreeze")
             waitUnfreeze = true;
             blockchain.now = unfreezeAt;
