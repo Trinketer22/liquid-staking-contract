@@ -227,7 +227,7 @@ int check_new_stake_msg(slice cs);
 
                 in_msg_body.end_parse();
                 throw_unless(error::credit_interest_too_high, credit_amount < muldiv(msg_value, interest + SHARE_BASIS, SHARE_BASIS) + ONE_TON);
-                interest = muldiv(credit_amount - msg_value, SHARE_BASIS, msg_value);
+                interest = muldivc(credit_amount - msg_value, SHARE_BASIS, msg_value);
                 if(state == state::SENT_BORROWING_REQUEST) {
                   state = state::REST;
                 }
