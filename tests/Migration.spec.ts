@@ -1,6 +1,6 @@
 import '@ton/test-utils';
-import { Blockchain, BlockchainSnapshot, createShardAccount, internal, SandboxContract, TreasuryContract } from '@ton/sandbox';
-import { Address, beginCell, Cell, Dictionary, toNano  } from '@ton/core';
+import { Blockchain, BlockchainSnapshot, createShardAccount, internal, SandboxContract, SendMessageResult, SmartContract, TreasuryContract } from '@ton/sandbox';
+import { Address, beginCell, Cell, Dictionary, toNano, internal as internal_relaxed, storeMessageRelaxed  } from '@ton/core';
 import { Pool } from '../wrappers/Pool';
 import { ConfigTest } from '../wrappers/ConfigTest';
 import { compile } from '@ton/blueprint';
@@ -42,6 +42,12 @@ let newControllers: SandboxContract<Controller>[];
 let newPoolCode: Cell;
 let newControllerCode: Cell;
 
+// Multisig related stuff
+let multisigContract: SmartContract;
+let multtisigThreshold: number;
+let multisigSeqNo: bigint;
+let multisigSigners: Address[];
+
 let fetchStates: (accounts: Address[], opts: Partial<{ retryCount: number, key: string}>) => Promise<void>;
 let fetchLibrary :(libHash: Buffer, retryCount?: number) => Promise<void>;
 let libraries: Dictionary<Buffer,Cell>;
@@ -49,6 +55,7 @@ let getCurTime: () => number;
 let printMsg: (...data: any[]) => void;
 let mockRound:(profit: bigint) => Promise<void>;
 let announceElections:() => Promise<number>;
+let createAndSignMultisigTransfer: (body: Cell) => Promise<SendMessageResult>;
 
 const verbose = false;
 const saveStates = false;
@@ -306,6 +313,92 @@ describe('Pool migration test', () => {
                 console.log(...msg);
             }
         }
+        createAndSignMultisigTransfer = async (body: Cell) => {
+            const transferMsg = internal_relaxed({
+                to: pool.address,
+                body,
+                value: toNano('1'),
+            })
+            const msgPacked = beginCell().store(
+                storeMessageRelaxed(transferMsg)
+            ).endCell();
+
+            const transferAction = beginCell()
+                                    // send message order
+                                    .storeUint(0xf1381e5b, 32)
+                                    // Pay gas separately, ignore errors
+                                    .storeUint(3, 8)
+                                    .storeRef(msgPacked)
+                                   .endCell();
+
+            let orderDict = Dictionary.empty(
+                Dictionary.Keys.Uint(8),
+                Dictionary.Values.Cell()
+            );
+            orderDict.set(0, transferAction);
+
+            const orderCell = beginCell().storeDictDirect(orderDict).endCell();
+            const orderAddr = (await multisigContract.get(
+                'get_order_address',
+                [{type: 'int', value: multisigSeqNo}])
+            ).stackReader.readAddress()
+
+            const newOrderMessage = beginCell()
+                                     .storeUint(0xf718510f, 32)
+                                     .storeUint(0, 64)
+                                     .storeUint(multisigSeqNo++, 256)
+                                     .storeBit(true)
+                                     .storeUint(0, 8)
+                                     .storeUint(getCurTime() + 3600 * 24 * 365, 48)
+                                     .storeRef(orderCell)
+                                    .endCell();
+            let res = await blockchain.sendMessage(internal({
+                from: multisigSigners[0],
+                to: multisigContract.address,
+                body: newOrderMessage,
+                value: toNano('1')
+            }));
+
+            // Should not fail and send out message to the order
+            expect(res.transactions).toHaveTransaction({
+                on: multisigContract.address,
+                aborted: false,
+                outMessagesCount: 1
+            });
+            expect(res.transactions).toHaveTransaction({
+                on: orderAddr,
+                from: multisigContract.address,
+                aborted: false
+            })
+
+            const approveMsg = beginCell()
+            .storeUint(0, 32)
+                .storeStringTail("approve")
+            .endCell()
+
+            for(let i = 1; i < multtisigThreshold; i++) {
+                res = await blockchain.sendMessage(internal({
+                    from: multisigSigners[i],
+                    to: orderAddr,
+                    body: approveMsg,
+                    value: toNano('1')
+                }));
+                expect(res.transactions).toHaveTransaction({
+                    on: orderAddr,
+                    from: multisigSigners[i],
+                    aborted: false
+                })
+            }
+
+            // Check that order executed in the end.
+            expect(res.transactions).toHaveTransaction({
+                on: multisigContract.address,
+                from: orderAddr,
+                op: 0x75097f5d, // Execute,
+                aborted: false,
+            });
+            return res;
+        }
 
         await fetchStates([poolAddress, configAddress, electorAddress], {key: apiKey});
 
@@ -327,6 +420,10 @@ describe('Pool migration test', () => {
         if(poolData.withdrawalPayout) {
             accountsToFetch.push(poolData.withdrawalPayout);
         }
+        // Sudoer is necessary for test suite
+        expect(poolData.sudoer).not.toBeNull();
+        // Multisig address
+        accountsToFetch.push(poolData.sudoer);
 
         const parseBorrower = (k: bigint) => {
             const controllerAddress = new Address(-1, Buffer.from(k.toString(16).padStart(64, '0'), 'hex'));
@@ -345,15 +442,30 @@ describe('Pool migration test', () => {
 
 
         await fetchStates(accountsToFetch, {key: apiKey});
+        blockchain.libs = beginCell().storeDictDirect(libraries).endCell();
+
+        // Load multisig data
+        multisigContract = await blockchain.getContract(poolData.sudoer);
+        const multisigData = (await multisigContract.get('get_multisig_data', [])).stackReader;
+        multisigSeqNo = multisigData.readBigNumber();
+        if(multisigSeqNo == -1n) {
+            multisigSeqNo = BigInt(Math.floor(Date.now() / 1000));
+        }
+        multtisigThreshold = multisigData.readNumber();
+        multisigSigners = Dictionary.loadDirect(
+            Dictionary.Keys.Uint(8), Dictionary.Values.Address(),
+            multisigData.readCell()
+        ).values();
+        expect(multisigSigners.length).toBeGreaterThanOrEqual(multtisigThreshold);
     })
 
     it('should be able to set current code', async () => {
         const poolData = await pool.getFullData();
         expect(poolData.contract_version).toBe(1);
 
-        const sudoerSender = blockchain.sender(poolData.sudoer);
-
-        const res = await pool.sendUpgrade(sudoerSender,null, newPoolCode, null);
+        const res = await createAndSignMultisigTransfer(Pool.upgradeMessage(
+            null, newPoolCode, null
+        ));
         expect(res.transactions).toHaveTransaction({
             on: pool.address,
             op: Op.sudo.upgrade,
@@ -368,10 +480,10 @@ describe('Pool migration test', () => {
     it('should be able to set controller code', async () => {
         const poolData = await pool.getFullData();
         expect(poolData.controllerCode).not.toEqualCell(newControllerCode);
-        const sudoerSender = blockchain.sender(poolData.sudoer);
-        await pool.sendSetCodes(sudoerSender, {
+
+        await createAndSignMultisigTransfer(Pool.sudoSetCodesMessage({
             controller: newControllerCode
-        });
+        }));
 
         const poolAfter = await pool.getFullData();
         expect(poolAfter.controllerCode).toEqualCell(newControllerCode);
