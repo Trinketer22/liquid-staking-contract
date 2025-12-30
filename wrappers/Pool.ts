@@ -7,14 +7,14 @@ export type PoolConfig = {
   pool_jetton: Address;
   pool_jetton_supply: bigint;
   optimistic_deposit_withdrawals: bigint;
-  
+
   sudoer: Address;
   governor: Address;
   interest_manager: Address;
   halter: Address;
   approver: Address;
   treasury?: Address;
-  
+
   controller_code: Cell;
   payout_wallet_code?: Cell;
   pool_jetton_wallet_code: Cell;
@@ -392,76 +392,111 @@ export class Pool implements Contract {
         });
     }
 
-    async sendRequestControllerDeploy(provider: ContractProvider, via: Sender, value: bigint, controllerId: number) {
+    static controllerDeployMessage(controllerId: number, query_id: bigint | number = 0) {
+        return beginCell()
+                  .storeUint(Op.pool.deploy_controller, 32) // op = pool::deploy_controller
+                  .storeUint(query_id, 64) // query id
+                  .storeUint(controllerId, 32) // controller_id
+               .endCell()
+    }
+    async sendRequestControllerDeploy(provider: ContractProvider, via: Sender, value: bigint, controllerId: number, query_id: bigint | number = 0) {
         await provider.internal(via, {
             value,
             sendMode: SendMode.PAY_GAS_SEPARATELY,
-            body: beginCell()
-                     .storeUint(Op.pool.deploy_controller, 32) // op = pool::deploy_controller
-                     .storeUint(0, 64) // query id
-                     .storeUint(controllerId, 32) // controller_id
-                  .endCell(),
+            body: Pool.controllerDeployMessage(controllerId, query_id)
         });
     }
 
-    async sendDeposit(provider: ContractProvider, via: Sender, value: bigint) {
+    static depositMessage(query_id: bigint | number = 1) {
+        return beginCell()
+                  .storeUint(Op.pool.deposit, 32) // op = pool::deposit
+                  .storeUint(query_id, 64) // query id
+               .endCell()
+
+    }
+    async sendDeposit(provider: ContractProvider, via: Sender, value: bigint, query_id: bigint | number = 0) {
         await provider.internal(via, {
             value,
             sendMode: SendMode.PAY_GAS_SEPARATELY,
-            body: beginCell()
-                     .storeUint(Op.pool.deposit, 32) // op = pool::deposit
-                     .storeUint(1, 64) // query id
-                  .endCell(),
+            body: Pool.depositMessage(query_id)
         });
-   }
+    }
+    static depositSettingsMessage(optimistic: Boolean, depositOpen: Boolean,
+                                  instantWithdrawalFee: number = 0, revShare: number = 0,
+                                  query_id: bigint | number = 1) {
+        return beginCell()
+                  .storeUint(Op.governor.set_deposit_settings, 32) // op = setDepositSettings
+                  .storeUint(query_id, 64) // query id
+                  .storeUint(Number(optimistic), 1)
+                  .storeUint(Number(depositOpen), 1)
+                  .storeUint(instantWithdrawalFee, 24)
+                  .storeUint(revShare, 24)
+               .endCell()
+    }
+
+
     async sendSetDepositSettings(provider: ContractProvider, via: Sender, value: bigint,
                                  optimistic: Boolean, depositOpen: Boolean,
-                                 instantWithdrawalFee: number = 0, revShare: number = 0) {
+                                 instantWithdrawalFee: number = 0, revShare: number = 0,
+                                 query_id: bigint | number = 0) {
         await provider.internal(via, {
             value,
             sendMode: SendMode.PAY_GAS_SEPARATELY,
-            body: beginCell()
-                     .storeUint(Op.governor.set_deposit_settings, 32) // op = setDepositSettings
-                     .storeUint(1, 64) // query id
-                     .storeUint(Number(optimistic), 1)
-                     .storeUint(Number(depositOpen), 1)
-                     .storeUint(instantWithdrawalFee, 24)
-                     .storeUint(revShare, 24)
-                  .endCell(),
+            body: Pool.depositSettingsMessage(optimistic, depositOpen, instantWithdrawalFee, revShare, query_id)
         });
     }
 
-    async sendTouch(provider: ContractProvider, via: Sender) {
+    static poolTouchMessage(query_id: bigint | number = 1) {
+       return beginCell()
+                 .storeUint(Op.pool.touch, 32) // op = touch
+                 .storeUint(query_id, 64) // query id
+              .endCell();
+    }
+    async sendTouch(provider: ContractProvider, via: Sender, query_id: bigint | number = 1) {
         await provider.internal(via, {
             value: toNano('0.1'),
             sendMode: SendMode.PAY_GAS_SEPARATELY,
-            body: beginCell()
-                     .storeUint(Op.pool.touch, 32) // op = touch
-                     .storeUint(1, 64) // query id
-                  .endCell(),
+            body: Pool.poolTouchMessage(query_id)
         });
     }
-    async sendDonate(provider: ContractProvider, via: Sender, value:bigint) {
+    static donateMessage(query_id: bigint | number = 1) {
+        return beginCell()
+                  .storeUint(Op.pool.donate, 32) // op = touch
+                  .storeUint(query_id, 64) // query id
+               .endCell();
+    }
+    async sendDonate(provider: ContractProvider, via: Sender, value:bigint, query_id: bigint | number = 1) {
         await provider.internal(via, {
             value: value + toNano('1'),
             sendMode: SendMode.PAY_GAS_SEPARATELY,
-            body: beginCell()
-                     .storeUint(Op.pool.donate, 32) // op = touch
-                     .storeUint(1, 64) // query id
-                  .endCell(),
+            body: Pool.donateMessage(query_id)
         });
     }
 
-    async sendSetInterest(provider: ContractProvider, via: Sender, interest:number) {
+    static setInterestMessage(interest: number, query_id: bigint | number) {
+        return beginCell()
+                  .storeUint(Op.interestManager.set_interest, 32) // op = touch
+                  .storeUint(query_id, 64) // query id
+                  .storeUint(interest, 24)
+               .endCell();
+    }
+    async sendSetInterest(provider: ContractProvider, via: Sender, interest:number, query_id: bigint | number = 1) {
         await provider.internal(via, {
             value: toNano('0.3'),
             sendMode: SendMode.PAY_GAS_SEPARATELY,
-            body: beginCell()
-                     .storeUint(Op.interestManager.set_interest, 32) // op = touch
-                     .storeUint(1, 64) // query id
-                     .storeUint(interest, 24)
-                  .endCell(),
+            body: Pool.setInterestMessage(interest, query_id)
         });
+    }
+    static setOperationalParametersMessage(min_validator_loan: bigint, max_validator_loan: bigint,
+                                           disbalance_tolerance: number | bigint, credit_start_before: number, query_id: number | bigint = 0) {
+        return beginCell()
+                   .storeUint(Op.interestManager.set_operational_params, 32)
+                   .storeUint(query_id, 64)
+                   .storeCoins(min_validator_loan)
+                   .storeCoins(max_validator_loan)
+                   .storeUint(disbalance_tolerance, 8)
+                   .storeUint(credit_start_before, 48)
+               .endCell()
     }
     async sendSetOperationalParameters(provider: ContractProvider, via: Sender,
                                        min_validator_loan: bigint, max_validator_loan: bigint,
@@ -469,15 +504,11 @@ export class Pool implements Contract {
         await provider.internal(via, {
             value: toNano('0.1'),
             sendMode: SendMode.PAY_GAS_SEPARATELY,
-            body: beginCell()
-                    .storeUint(Op.interestManager.set_operational_params, 32)
-                    .storeUint(query_id, 64)
-                    .storeCoins(min_validator_loan)
-                    .storeCoins(max_validator_loan)
-                    .storeUint(disbalance_tolerance, 8)
-                    .storeUint(credit_start_before, 48)
-                .endCell()
-        });
+            body: Pool.setOperationalParametersMessage(
+                min_validator_loan, max_validator_loan,
+                disbalance_tolerance, credit_start_before, query_id
+            )
+        })
     }
 
     async sendSetMinLoan(provider: ContractProvider, via: Sender, min_loan: bigint, query_id: number | bigint = 0) {
@@ -498,30 +529,31 @@ export class Pool implements Contract {
         await this.sendSetOperationalParameters(provider, via, oldData.minLoan, oldData.maxLoan, oldData.disbalanceTolerance, start_prior, query_id);
     }
 
+    static setGovernanceFeeMessage(fee: number | bigint, query_id: number | bigint = 1) {
+        return beginCell()
+                   .storeUint(Op.governor.set_governance_fee, 32)
+                   .storeUint(query_id, 64)
+                   .storeUint(fee, 24)
+               .endCell();
+    }
     async sendSetGovernanceFee(provider: ContractProvider, via: Sender, fee: number | bigint, query_id: number | bigint = 1) {
       await provider.internal(via, {
         value: toNano('0.3'),
         sendMode: SendMode.PAY_GAS_SEPARATELY,
-        body: beginCell()
-                   .storeUint(Op.governor.set_governance_fee, 32)
-                   .storeUint(query_id, 64)
-                   .storeUint(fee, 24)
-              .endCell()
+        body: Pool.setGovernanceFeeMessage(fee, query_id)
       });
     }
 
-    async sendSetRoles(provider: ContractProvider, via: Sender,
-                       roles: {
+    static setRolesMessage(roles: {
                          governor?: Address ,
                          interestManager?: Address,
                          halter?: Address,
                          approver?: Address,
                          treasury?: Address
-                       },
-                      ) {
-        let body = beginCell()
-                     .storeUint(Op.governor.set_roles, 32)
-                     .storeUint(1, 64);
+                       }, query_id: bigint | number = 1) {
+       let body = beginCell()
+             .storeUint(Op.governor.set_roles, 32)
+             .storeUint(query_id, 64);
         for (let role of [roles.governor, roles.interestManager, roles.halter, roles.approver]) {
             if(role) {
               body = body.storeBit(true).storeAddress(role!);
@@ -533,43 +565,65 @@ export class Pool implements Contract {
         if(roles.treasury) {
           body.storeBit(true).storeAddress(roles.treasury);
         }
+        return body.endCell()
+    }
+    async sendSetRoles(provider: ContractProvider, via: Sender,
+                       roles: {
+                         governor?: Address ,
+                         interestManager?: Address,
+                         halter?: Address,
+                         approver?: Address,
+                         treasury?: Address
+                       },
+                      ) {
         await provider.internal(via, {
             value: toNano('1'),
             sendMode: SendMode.PAY_GAS_SEPARATELY,
-            body: body.endCell()
+            body: Pool.setRolesMessage(roles)
         });
     }
 
-    async sendSetSudoer(provider: ContractProvider, via: Sender, sudoer: Address, value: bigint = toNano('1')) {
+    static setSudoerMessage(sudoer: Address, query_id: bigint | number = 1) {
+        return beginCell().storeUint(Op.governor.set_sudoer, 32)
+                          .storeUint(query_id, 64)
+                          .storeAddress(sudoer)
+               .endCell()
+
+    }
+    async sendSetSudoer(provider: ContractProvider, via: Sender, sudoer: Address, value: bigint = toNano('1'), query_id: bigint | number = 1) {
         await provider.internal(via, {
             sendMode: SendMode.PAY_GAS_SEPARATELY,
             value,
-            body: beginCell().storeUint(Op.governor.set_sudoer, 32)
-                             .storeUint(1, 64)
-                             .storeAddress(sudoer)
-                  .endCell()
+            body: Pool.setSudoerMessage(sudoer, query_id)
         });
     }
 
+    static sudoMessage(mode:number, msg: Message, query_id: bigint | number = 0) {
+        return beginCell().storeUint(Op.sudo.send_message, 32)
+                          .storeUint(query_id, 64)
+                          .storeUint(mode, 8)
+                          .storeRef(beginCell().store(storeMessage(msg)).endCell())
+               .endCell();
+
+    }
     async sendSudoMsg(provider: ContractProvider, via: Sender, mode:number, msg: Message, query_id: bigint | number = 0) {
         await provider.internal(via, {
             sendMode: SendMode.PAY_GAS_SEPARATELY,
             value : toNano('1'),
-            body: beginCell().storeUint(Op.sudo.send_message, 32)
-                             .storeUint(query_id, 64)
-                             .storeUint(mode, 8)
-                             .storeRef(beginCell().store(storeMessage(msg)).endCell())
-                  .endCell()
+            body: Pool.sudoMessage(mode, msg, query_id)
         });
     }
 
+    static haltMessage(query_id: bigint | number = 0) {
+        return beginCell().storeUint(Op.halter.halt, 32)
+                          .storeUint(query_id, 64)
+               .endCell();
+    }
     async sendHaltMessage(provider: ContractProvider, via: Sender, query_id: bigint | number = 0) {
         await provider.internal(via, {
             sendMode: SendMode.PAY_GAS_SEPARATELY,
             value: toNano('1'),
-            body: beginCell().storeUint(Op.halter.halt, 32)
-                             .storeUint(query_id, 64)
-                  .endCell()
+            body: Pool.haltMessage(query_id)
         });
     }
 
@@ -605,42 +659,52 @@ export class Pool implements Contract {
       });
     }
 
+    static unhaltMessage(query_id: bigint | number = 0) {
+        return beginCell().storeUint(Op.governor.unhalt, 32)
+                          .storeUint(query_id, 64)
+               .endCell()
+    }
     async sendUnhalt(provider: ContractProvider, via: Sender, query_id: bigint | number = 0) {
         await provider.internal(via, {
             sendMode: SendMode.PAY_GAS_SEPARATELY,
             value: toNano('1'),
-            body: beginCell().storeUint(Op.governor.unhalt, 32)
-                             .storeUint(query_id, 64)
-                  .endCell()
+            body: Pool.unhaltMessage(query_id)
         });
     }
 
+    static prepareGovernanceMigrationMessage(time: number | bigint, query_id: bigint | number = 0) {
+        return beginCell().storeUint(Op.governor.prepare_governance_migration, 32)
+                          .storeUint(query_id, 64)
+                          .storeUint(time, 48)
+               .endCell();
+    }
     async sendPrepareGovernanceMigration(provider: ContractProvider, via: Sender, time: number | bigint, query_id: bigint | number = 0) {
         await provider.internal(via, {
           sendMode: SendMode.PAY_GAS_SEPARATELY,
           value: toNano('1'),
-          body: beginCell().storeUint(Op.governor.prepare_governance_migration, 32)
-                           .storeUint(query_id, 64)
-                           .storeUint(time, 48)
-                .endCell()
+          body: Pool.prepareGovernanceMigrationMessage(time, query_id)
         });
     }
 
+    static upgradeMessage(data: Cell | null, code: Cell | null, afterUpgrade: Cell | null, query_id: bigint | number = 0) {
+        return beginCell()
+                  .storeUint(Op.sudo.upgrade, 32) // op = touch
+                  .storeUint(query_id, 64) // query id
+                  .storeMaybeRef(data)
+                  .storeMaybeRef(code)
+                  .storeMaybeRef(afterUpgrade)
+               .endCell();
+    }
+
     async sendUpgrade(provider: ContractProvider, via: Sender,
-                      data: Cell | null, code: Cell | null, afterUpgrade: Cell | null) {
+                      data: Cell | null, code: Cell | null, afterUpgrade: Cell | null, query_id: bigint | number = 1) {
         //upgrade#96e7f528 query_id:uint64
         //data:(Maybe ^Cell) code:(Maybe ^Cell) after_upgrade:(Maybe ^Cell) = InternalMsgBody;
 
         await provider.internal(via, {
             value: toNano('0.5'),
             sendMode: SendMode.PAY_GAS_SEPARATELY,
-            body: beginCell()
-                     .storeUint(Op.sudo.upgrade, 32) // op = touch
-                     .storeUint(1, 64) // query id
-                     .storeMaybeRef(data)
-                     .storeMaybeRef(code)
-                     .storeMaybeRef(afterUpgrade)
-                  .endCell(),
+            body: Pool.upgradeMessage(data, code, afterUpgrade, query_id)
         });
     }
     static sudoSetCodesMessage(codes: Partial<PoolChildCodes>, query_id: bigint | number = 0) {
@@ -648,12 +712,12 @@ export class Pool implements Contract {
                             .storeMaybeRef(codes.controller)
                             .storeMaybeRef(codes.jetton_wallet)
                             .storeMaybeRef(codes.payout_minter)
-                         .endCell();
+                          .endCell();
         return beginCell()
                 .storeUint(Op.sudo.set_codes, 32)
                 .storeUint(query_id, 64)
                 .storeRef(codesCell)
-              .endCell();
+               .endCell();
     }
 
     async sendSetCodes(provider: ContractProvider, via: Sender, codes: Partial<PoolChildCodes>, value: bigint = toNano('0.05'), query_id: bigint | number = 0) {
