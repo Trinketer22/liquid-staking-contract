@@ -308,7 +308,7 @@ describe('Distributor NFT Collection', () => {
             const collectionData = await collection.getCollectionData();
             const index = collectionData.nextItemIndex;
             const nftAddress = await collection.getNFTAddress(index);
-            const nftItem = blockchain.openContract(PayoutItem.createFromConfig({admin: collection.address, index}, itemCode));
+            const nftItem = blockchain.openContract(PayoutItem.createFromConfig({admin: collection.address, index}, itemCode, 0, nftAddress));
             const mintResult = await blockchain.sendMessage(internal({
                 from: notDeployer.address,
                 to: nftAddress,

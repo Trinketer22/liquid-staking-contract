@@ -15,15 +15,16 @@ export function itemConfigToCell(config: PayoutItemConfig): Cell {
 }
 
 export class PayoutItem implements Contract {
-    constructor(readonly address: Address, readonly init?: { code: Cell; data: Cell }) {}
+    constructor(readonly address: Address, readonly init?: { code: Cell; data: Cell; splitDepth: number}) {}
 
     static createFromAddress(address: Address) {
         return new PayoutItem(address);
     }
-    static createFromConfig(config: PayoutItemConfig, code: Cell, workchain = 0) {
+    static createFromConfig(config: PayoutItemConfig, code: Cell, workchain = 0, address?: Address | null) {
         const data = itemConfigToCell(config);
-        const init = { code, data };
-        return new PayoutItem(contractAddress(workchain, init), init);
+        const init = { code, data, splitDepth: 8 };
+        const resolvedAddress = address ?? contractAddress(workchain, init);
+        return new PayoutItem(resolvedAddress, init);
     }
 
     async send(provider: ContractProvider, via: Sender, value: bigint, body: Cell) {
