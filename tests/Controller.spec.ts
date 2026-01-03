@@ -553,7 +553,7 @@ describe('Cotroller mock', () => {
                                       reqBalance - controllerSmc.balance + toNano('1'));
 
 
-        const res = controllerSmc.receiveMessage(internal({
+        const res = await controllerSmc.receiveMessage(internal({
           from: validator.wallet.address,
           to: controller.address,
           body: Controller.requestLoanMessage(minLoan, maxLoan, interest),
@@ -931,7 +931,7 @@ describe('Cotroller mock', () => {
         const maxInterest = getRandomInt(100, 300) << 8;
         const reqLoanMsg  = Controller.requestLoanMessage(loanAmount, loanAmount, maxInterest);
         const controllerSmc = await bc.getContract(controller.address);
-        const reqRes  =  controllerSmc.receiveMessage(internal({
+        const reqRes  =  await controllerSmc.receiveMessage(internal({
           from: validator.wallet.address,
           to: controller.address,
           body: reqLoanMsg,
@@ -1054,7 +1054,7 @@ describe('Cotroller mock', () => {
 
         for(let testVal of testValues) {
             const creditMsg = Controller.creditMessage(expLoan, testVal)
-            const res = smc.receiveMessage(internal({
+            const res = await smc.receiveMessage(internal({
                     from: poolAddress,
                     to: controller.address,
                     body: creditMsg,
@@ -1078,7 +1078,7 @@ describe('Cotroller mock', () => {
         for(let testVal of testValues) {
             const smc = await bc.getContract(controller.address);
             const creditMsg = Controller.creditMessage(expLoan, testVal)
-            const res = smc.receiveMessage(internal({
+            const res = await smc.receiveMessage(internal({
                     from: poolAddress,
                     to: controller.address,
                     body: creditMsg,
@@ -1320,7 +1320,7 @@ describe('Cotroller mock', () => {
         const notPool = differentAddress(poolAddress);
         const repay   = getRandomTon(100000, 200000);
         const stateBefore = await getControllerState();
-        const res = controllerSmc.receiveMessage(internal({
+        const res = await controllerSmc.receiveMessage(internal({
           from: notPool,
           to: controller.address,
           value: repay,
@@ -1335,7 +1335,7 @@ describe('Cotroller mock', () => {
         const notPool = differentAddress(poolAddress);
         const repay   = getRandomTon(100000, 200000);
         const bounceTime = getCurTime();
-        const res = controllerSmc.receiveMessage(internal({
+        const res = await controllerSmc.receiveMessage(internal({
           from: poolAddress,
           to: controller.address,
           value: repay,
