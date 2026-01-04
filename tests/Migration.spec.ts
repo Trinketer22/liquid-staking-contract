@@ -12,6 +12,48 @@ import {writeFile} from 'fs/promises';
 import { getRandomInt } from '../utils';
 import { getSecureRandomBytes, keyPairFromSeed } from 'ton-crypto';
 
+declare global {
+    namespace jest {
+        interface Matchers<R> {
+            toEqualCellAware(expected: unknown): R;
+        }
+    }
+}
+
+const normalizeCellAware = (value: any): any => {
+    if (value instanceof Cell) {
+        return value.hash().toString('hex');
+    }
+    if (Buffer.isBuffer(value)) {
+        return value.toString('hex');
+    }
+    if (value instanceof Address) {
+        return value.toRawString();
+    }
+    if (Array.isArray(value)) {
+        return value.map(normalizeCellAware);
+    }
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(
+            Object.entries(value).map(([k, v]) => [k, normalizeCellAware(v)])
+        );
+    }
+    return value;
+};
+
+expect.extend({
+    toEqualCellAware(received: unknown, expected: unknown) {
+        const normalizedReceived = normalizeCellAware(received);
+        const normalizedExpected = normalizeCellAware(expected);
+        const pass = this.equals(normalizedReceived, normalizedExpected);
+        return {
+            pass,
+            message: () =>
+                `Expected (cell-aware) ${this.utils.printExpected(normalizedExpected)}\n` +
+                `Received ${this.utils.printReceived(normalizedReceived)}`,
+        };
+    },
+});
 
 type AccountState = {
     address: string,
@@ -472,7 +514,10 @@ describe('Pool migration test', () => {
             aborted: false
         })
         const poolAfter = await pool.getFullData();
-        expect(poolAfter.contract_version).toBe(3);
+        expect(poolAfter).toEqualCellAware({
+            ...poolData,
+            contract_version: 3,
+        });
         expect(poolAfter.currentRound.withdrawRatePrev2X24).toBe(0n);
         expect(poolAfter.previousRound.withdrawRatePrev2X24).toBe(0n);
     });
@@ -486,7 +531,10 @@ describe('Pool migration test', () => {
         }));
 
         const poolAfter = await pool.getFullData();
-        expect(poolAfter.controllerCode).toEqualCell(newControllerCode);
+        expect(poolAfter).toEqualCellAware({
+            ...poolData,
+            controllerCode: newControllerCode,
+        });
     })
     it('should be able to close previous round', async () => {
         const confDict = await config.getConfigDict();
@@ -610,11 +658,11 @@ describe('Pool migration test', () => {
         await pool.sendSetDepositSettings(governorSender, toNano('1'), poolData.optimisticDepositWithdrawals, poolData.depositsOpen, poolData.instantWithdrawalFee, revShare);
         const poolAfter = await pool.getFullData();
 
-        expect(poolAfter.revShare).toEqual(revShare);
-        // Just in case
-        expect(poolAfter.optimisticDepositWithdrawals).toEqual(poolData.optimisticDepositWithdrawals);
-        expect(poolAfter.depositsOpen).toEqual(poolData.depositsOpen);
-        expect(poolAfter.instantWithdrawalFee).toEqual(poolData.instantWithdrawalFee);
+        expect(poolAfter).toEqualCellAware({
+            ...poolData,
+            projectedTotalBalance: poolData.totalBalance, // non-zero revShare means new way of calculating projection
+            revShare: revShare,
+        });
     })
     it('should be able to borrow with new controllers', async () => {
         // blockchain.setConfig(await config.getConfigCell());
