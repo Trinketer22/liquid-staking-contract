@@ -41,3 +41,36 @@ That means that it is highly not recommended to make such settings that expected
 In particular, it is NOT RECOMMENDED to set `interest_rate` to zero and rely on revenue share only.
 ## Withdrawal to response address
 Do not ignore response address, instead check if it is valid and send withdrawal there
+
+# 2026.01 update (V3)
+
+## Update is dedicated to profit share (revenue share) logic
+
+1. Pool can run with `0` fixed interest and use revenue sharing instead
+
+* Governance sets a revenue_share value between `0` and `1` and the Pool includes it in the credit message sent to controllers.
+
+* `revenue_share = 0` means the feature is disabled.
+
+* When enabled, the Pool uses the deposit conversion rate from two rounds ago (`N-2`) as the default withdrawal rate. If the current rate is lower than the `N-2` rate, the Pool uses the current (lower) rate instead.
+
+* The deposit rate is calculated as `total_balance / supply` (minus fees).
+
+* If the Pool has losses (so the current rate drops below the `N-2` rate), then in the next round the withdrawal rate equals the deposit rate (no fees).
+
+* To reduce risk when losses are expected, the instant withdrawal fee is expected to be set above 0.
+
+* The Pool now stores deposit rates per round. Revenue sharing cannot be enabled until enough history exists (so the `N-2` rate is available).
+
+2. Controller credit messages include `rev_share`
+
+* The controller checks the incoming `rev_share` and rejects it if it is higher than the maximum share allowed by the controller operator.
+
+3. NFT bills and payout sharding optimizations
+
+* Beside making withdrawal process faster (note that withdrawasl can not be done in parallel, so this change doesn't sacrifice parallelization), it also solves hypothetical issue in *not-all-shards-are-neighbours* situation, where withdrawn jettons may reach payout prior to payout being deployed.
+
+4. Rollback: “withdraw to response address”
+
+* Removed because it breaks locker compatibility. Withdrawals are now always sent to the sender address.
+
