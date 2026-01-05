@@ -4,7 +4,6 @@ import { Pool } from '../wrappers/Pool';
 import { Controller } from '../wrappers/Controller';
 import { JettonMinter as DAOJettonMinter, jettonContentToCell } from '../contracts/jetton_dao/wrappers/JettonMinter';
 import { JettonWallet as PoolJettonWallet } from '../wrappers/JettonWallet';
-import { setConsigliere } from '../wrappers/PayoutMinter.compile';
 import { getElectionsConf, getVset, loadConfig, packValidatorsSet } from "../wrappers/ValidatorUtils";
 import '@ton/test-utils';
 import { readFileSync } from 'fs';
@@ -24,7 +23,6 @@ describe('Withdraw Fees Printer', () => {
     let pool_code: Cell;
     let controller_code: Cell;
     let payout_minter_code: Cell;
-    let payout_wallet_code: Cell;
     let payout_collection: Cell;
 
     let dao_minter_code: Cell;
@@ -96,10 +94,6 @@ describe('Withdraw Fees Printer', () => {
             blockchain.treasury("wallet5"),
         ]);
 
-        await setConsigliere(deployer.address);
-
-        payout_minter_code = await compile('PayoutMinter');
-        payout_wallet_code = await compile('PayoutWallet');
 
         payout_collection = await compile('PayoutNFTCollection');
 
@@ -138,9 +132,8 @@ describe('Withdraw Fees Printer', () => {
               approver : deployer.address,
 
               controller_code : controller_code,
-              payout_wallet_code : payout_wallet_code,
               pool_jetton_wallet_code : dao_wallet_code,
-              payout_minter_code : nftDistribution ? payout_collection : payout_minter_code,
+              payout_minter_code : payout_collection,
               vote_keeper_code : dao_vote_keeper_code,
         };
         pool = blockchain.openContract(Pool.createFromConfig(poolConfig, pool_code));
@@ -263,20 +256,6 @@ describe('Withdraw Fees Printer', () => {
         `;
         console.log(toPrint);
     }
-/*
-    describe('Withdraw Normal', () => {
-        beforeAll(deployAll);
-        it('5 new wallets', async () => {
-            await withdraw5('5 WITH NEW WALLETS (NORMAL)');
-        });
-        it('5 new but first rotates the round', async () => {
-            await blockchain.loadFrom(normalState);
-            newVset();
-            toElections();
-            await withdraw5("5 WITH NEW WALLETS, FIRST ROTATES (NORMAL)");
-        });
-    });
-*/
     nftDistribution = true;
     optimistic = false;
     describe('Withdraw Optimistic', () => {

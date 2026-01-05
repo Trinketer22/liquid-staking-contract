@@ -40,7 +40,6 @@ describe('New operational parameters tests', () => {
     let controller_code:Cell;
 
     let payout_minter_code:Cell;
-    let payout_wallet_code:Cell;
     let dao_minter_code:Cell;
     let dao_wallet_code:Cell;
     let dao_voting_code:Cell;
@@ -66,7 +65,6 @@ describe('New operational parameters tests', () => {
         controller_code = await compile('Controller');
         pool_code = await compile('Pool');
         payout_minter_code = await compile('PayoutNFTCollection');
-        payout_wallet_code = await compile('PayoutWallet');
         dao_minter_code = await compile('DAOJettonMinter');
         const dao_wallet_code_raw = await compile('DAOJettonWallet');
         dao_vote_keeper_code = await compile('DAOVoteKeeper');
