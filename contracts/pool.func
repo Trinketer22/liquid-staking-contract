@@ -778,17 +778,22 @@ int muldiv_extra(int a, int b, int c) inline {
 
 (int, int) _get_projected_conversion_ratio () inline {
     var [borrowers_dict, round_id, active_borrowers, borrowed, expected, returned, profit, withdrawal_rate_prev2_x24] = prev_round_borrowers;
-    [_, _, _, int rev_share] = deposit_withdrawal_parameters;
-    int expected_profit = expected - borrowed - FINALIZE_ROUND_FEE;
-    int fee = max(muldiv(governance_fee_share, expected_profit, SHARE_BASIS), 0);
-    expected_profit -= fee;
-    ifnot (rev_share) {
-        return (max(total_balance + expected_profit, 0), supply);
-    } else {
-        return (total_balance, supply);
+    [_, _, int instant_withdrawal_fee, int rev_share] = deposit_withdrawal_parameters;
+    int expected_profit = - FINALIZE_ROUND_FEE;
+    ifnot(rev_share) {
+      expected_profit += expected - borrowed;
+      int fee = max(muldiv(governance_fee_share, expected_profit, SHARE_BASIS), 0);
+      expected_profit -= fee;
     }
+    int aproximate_balance = max(total_balance + expected_profit, 0);
+    if(instant_withdrawal_fee > 0) {
+      int additional_fee = muldiv(aproximate_balance,
+                                  instant_withdrawal_fee,
+                                  SHARE_BASIS);
+      aproximate_balance -= additional_fee;
+    }
+    return (aproximate_balance, supply);
 }
-
 
 (slice) get_controller_address(int controller_id, slice validator) method_id {
     load_data();
