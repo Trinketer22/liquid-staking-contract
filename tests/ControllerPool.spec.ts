@@ -3,7 +3,6 @@ import { Cell, toNano, beginCell, Address, Dictionary } from '@ton/core';
 import { Pool, PoolConfig } from '../wrappers/Pool';
 import { Controller, ControllerConfig } from '../wrappers/Controller';
 import { JettonMinter as DAOJettonMinter, jettonContentToCell } from '../contracts/jetton_dao/wrappers/JettonMinter';
-import { setConsigliere } from '../wrappers/PayoutMinter.compile';
 import { getElectionsConf, getVset, loadConfig, packValidatorsSet } from "../wrappers/ValidatorUtils";
 import '@ton/test-utils';
 import { randomAddress } from "@ton/test-utils";
@@ -37,7 +36,6 @@ describe('Controller & Pool', () => {
     let pool_code: Cell;
     let controller_code: Cell;
     let payout_minter_code: Cell;
-    let payout_wallet_code: Cell;
 
     let dao_minter_code: Cell;
     let dao_wallet_code: Cell;
@@ -109,9 +107,7 @@ describe('Controller & Pool', () => {
 
         deployer = await blockchain.treasury('deployer', {balance: toNano("1000000000")});
 
-        await setConsigliere(deployer.address);
-        payout_minter_code = await compile('PayoutMinter');
-        payout_wallet_code = await compile('PayoutWallet');
+        payout_minter_code = await compile('PayoutNFTCollection');
 
         pool_code = await compile('Pool');
         controller_code = await compile('Controller');
@@ -150,7 +146,6 @@ describe('Controller & Pool', () => {
               approver : deployer.address,
 
               controller_code : controller_code,
-              payout_wallet_code : payout_wallet_code,
               pool_jetton_wallet_code : dao_wallet_code,
               payout_minter_code : payout_minter_code,
               vote_keeper_code : dao_vote_keeper_code,

@@ -3,7 +3,6 @@ import { Cell, toNano, fromNano, beginCell, Address, Dictionary } from '@ton/cor
 import { Pool } from '../wrappers/Pool';
 import { Controller } from '../wrappers/Controller';
 import { JettonMinter as DAOJettonMinter, jettonContentToCell } from '../contracts/jetton_dao/wrappers/JettonMinter';
-import { setConsigliere } from '../wrappers/PayoutMinter.compile';
 import { getElectionsConf, getVset, loadConfig, packValidatorsSet } from "../wrappers/ValidatorUtils";
 import '@ton/test-utils';
 import { readFileSync } from 'fs';
@@ -20,7 +19,6 @@ describe('Deposit Fees Printer', () => {
     let pool_code: Cell;
     let controller_code: Cell;
     let payout_minter_code: Cell;
-    let payout_wallet_code: Cell;
     let payout_collection: Cell;
 
     let dao_minter_code: Cell;
@@ -75,10 +73,6 @@ describe('Deposit Fees Printer', () => {
             blockchain.treasury("wallet5"),
         ]);
 
-        await setConsigliere(deployer.address);
-
-        payout_minter_code = await compile('PayoutMinter');
-        payout_wallet_code = await compile('PayoutWallet');
 
         payout_collection = await compile('PayoutNFTCollection');
 
@@ -117,9 +111,8 @@ describe('Deposit Fees Printer', () => {
               approver : deployer.address,
 
               controller_code : controller_code,
-              payout_wallet_code : payout_wallet_code,
               pool_jetton_wallet_code : dao_wallet_code,
-              payout_minter_code : nftDistribution ? payout_collection : payout_minter_code,
+              payout_minter_code : payout_collection,
               vote_keeper_code : dao_vote_keeper_code,
         };
         pool = blockchain.openContract(Pool.createFromConfig(poolConfig, pool_code));
@@ -294,31 +287,6 @@ describe('Deposit Fees Printer', () => {
     });
 
     optimistic = true;
-    describe('Deposit Optimistic', () => {
-        beforeAll(deployAll);
-
-        it('5 new wallets', async () => {
-            await deposit5Optimistic("5 WITH NEW WALLETS (OPTIMISTIC)");
-        });
-
-        it('5 existing wallets', async () => {
-            await deposit5Optimistic("5 WITH EXISTING WALLETS (OPTIMISTIC)")
-        });
-
-        it('5 new but first rotates the round', async () => {
-            await blockchain.loadFrom(normalState);
-            newVset();
-            toElections();
-            await deposit5Optimistic("5 WITH NEW WALLETS, FIRST ROTATES (OPTIMISTIC)");
-        });
-
-        it('5 times from the same wallet', async () => {
-            await blockchain.loadFrom(normalState);
-            wallets = [wallets[0], wallets[0], wallets[0], wallets[0], wallets[0]];
-            await deposit5Optimistic("5 FROM THE SAME WALLET (OPTIMISTIC)");
-        });
-    });
-
     nftDistribution = true;
     describe('Deposit Optimistic NFT', () => {
         beforeAll(deployAll);

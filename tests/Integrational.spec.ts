@@ -20,7 +20,6 @@ import { Pool, PoolConfig } from '../wrappers/Pool';
 import { Controller, ControllerConfig, controllerConfigToCell } from '../wrappers/Controller';
 import { Elector } from "../wrappers/Elector";
 import { Config  } from "../wrappers/Config";
-import { setConsigliere } from "../wrappers/PayoutMinter.compile";
 import { Conf, ControllerState, Errors, Op } from "../PoolConstants";
 import { PayoutCollection, Conf as NFTConf, Op as NFTOp } from "../wrappers/PayoutNFTCollection";
 import { PayoutItem } from "../wrappers/PayoutNFTItem";
@@ -69,7 +68,6 @@ describe('Integrational tests', () => {
     let elector_code:Cell;
     let pool_code:Cell;
     let payout_minter_code:Cell;
-    let payout_wallet_code:Cell;
     let dao_minter_code:Cell;
     let dao_wallet_code:Cell;
     let dao_voting_code:Cell;
@@ -170,9 +168,7 @@ describe('Integrational tests', () => {
         deployer = await bc.treasury('deployer', {workchain: -1, balance: toNano("1000000000")});
         controller_code = await compile('Controller');
         pool_code = await compile('Pool');
-        await setConsigliere(deployer.address);
         payout_minter_code = await compile('PayoutNFTCollection');
-        payout_wallet_code = await compile('PayoutWallet');
         dao_minter_code = await compile('DAOJettonMinter');
         const dao_wallet_code_raw = await compile('DAOJettonWallet');
         dao_vote_keeper_code = await compile('DAOVoteKeeper');
