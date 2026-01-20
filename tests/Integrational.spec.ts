@@ -2003,7 +2003,7 @@ describe('Integrational tests', () => {
             borrowed: bigint,
             profit: bigint
         };
-        const validatorsCount = 1;
+        const validatorsCount = 2;
         const nmPerValidator = 2;
         const roundCount = 4;
         const nmCount = 20;
@@ -2051,7 +2051,7 @@ describe('Integrational tests', () => {
             for(let i = 0; i < validatorsCount; i++) {
                 const newValidator = {
                     wallet: await bc.treasury(`Validator:${i}`, {workchain: -1, balance: startValue * 10n}),
-                    keys: await keyPairFromSeed(await getSecureRandomBytes(32))
+                    keys: keyPairFromSeed(await getSecureRandomBytes(32))
                 };
                 validators.push(newValidator);
                 let myControllers: SandboxContract<Controller>[] = [];
@@ -2487,6 +2487,186 @@ describe('Integrational tests', () => {
                 await bc.loadFrom(prevState);
             }
             console.log(`Max prevRround - acutalRate delta ${Number(maxDelta) / 10 ** 9}`);
+        });
+        it('should survive controller fine', async () => {
+            const rndProfitShare = getRandomInt(Math.ceil(SHARE_BASIS / 100), REV_SHARE)
+            await setupRevShareMode({revShare: rndProfitShare});
+            const poolBefore = await pool.getFullData();
+            const curControllers = controllers.get(validators[0].wallet.address.toString())!;
+            const controllerStates = await Promise.all(curControllers.map(controller => controller.getControllerData()));
+            const stakenControllers = controllerStates.filter(state => state.state == ControllerState.FUNDS_STAKEN);
+            expect(stakenControllers.length).toBe(2);
+
+            const stakenController = curControllers[0];
+            const smc = await bc.getContract(stakenController.address);
+            expect(smc.balance).toBeLessThan(controllerStates[0].borrowedAmount);
+            // If there was any excess ever
+            smc.balance = toNano('100');
+            let vsetUpd = await stakenController.sendUpdateHash(validators[0].wallet.getSender())
+            // Rotate for the current round controller too
+            await curControllers[1].sendUpdateHash(validators[0].wallet.getSender());
+            waitUnlock(vsetUpd.transactions[1].now);
+            await elector.sendTickTock("tick");
+            await elector.sendTickTock("tock");
+
+            const recoverStakeReq = Controller.recoverStakeMessage();
+
+            // Put the controller to recover state, but don't do any further processing.
+            await smc.receiveMessage(internal({
+                from: validators[0].wallet.address,
+                to: stakenController.address,
+                body: recoverStakeReq,
+                value: Conf.electorOpValue
+            }));
+
+            const preRecover = await stakenController.getControllerData();
+            expect(preRecover.state).toEqual(ControllerState.SENT_RECOVER_REQUEST);
+
+            // Now imitate the fine by returning half the borrowed amount
+            const withFine = await bc.sendMessage(internal({
+                to: stakenController.address,
+                from: elector.address,
+                body: beginCell().storeUint(Op.elector.recover_stake_ok, 32).storeUint(0, 64).endCell(),
+                value: preRecover.stakeSent / 2n
+            }));
+
+            expect(withFine.transactions).not.toHaveTransaction({
+                on: pool.address,
+                from: stakenController.address,
+                op: Op.pool.loan_repayment
+            });
+
+            const postRecover = await stakenController.getControllerData();
+            expect(postRecover.state).toEqual(ControllerState.INSOLVENT);
+
+            const insolventRec = await stakenController.sendReturnAvailableFunds(deployer.getSender());
+
+            expect(insolventRec.transactions).toHaveTransaction({
+                on: pool.address,
+                from: stakenController.address,
+                op: Op.pool.loan_repayment,
+                value: (v) => v! < preRecover.borrowedAmount
+            });
+
+            const poolAfter = await pool.getFullData();
+            expect(poolAfter.projectedTotalBalance).toBeLessThan(poolBefore.projectedTotalBalance);
+            // For now
+            // Actually, withraw rate keeps climbing, because it displays rate prior to the end of round and profit calculating
+            // Is that even ok?
+            // expect(poolAfter.currentRound.withdrawRatePrev2X24).toBeLessThan(poolBefore.previousRound.withdrawRatePrev2X24);
+            const withdrawAmount = BigInt(getRandomInt(1000, 10_000)) * toNano('1');
+
+            const firstOneOut = depositors[0];
+
+            let withdrawJetton = bc.openContract(DAOWallet.createFromAddress(
+                await poolJetton.getWalletAddress(firstOneOut.address)
+            ));
+
+            const instantWithdraw = await withdrawJetton.sendBurnWithParams(firstOneOut.getSender(), toNano('1.05'),
+                withdrawAmount,
+                firstOneOut.address, false, false);
+
+
+            let amountByWRate = withdrawAmount * poolAfter.previousRound.withdrawRatePrev2X24 / Conf.shareBase;
+            let amountByImmediateRate = poolAfter.totalBalance * withdrawAmount / poolAfter.supply;
+            expect(amountByImmediateRate).toBeLessThan(amountByWRate);
+
+            const rateDelta =  amountByWRate - amountByImmediateRate;
+            expect(rateDelta).toBeGreaterThan(toNano('50'))
+            console.log("Rate delta:", Number(rateDelta) / 10 ** 9);
+
+            const reqTx = findTransaction(instantWithdraw.transactions, {
+                from: poolJetton.address,
+                to: pool.address,
+                op: Op.pool.withdraw,
+                outMessagesCount: (x) => x! >= 1
+            })!;
+            expect(reqTx).not.toBeUndefined();
+
+            const inMsg = reqTx.inMessage!;
+            if(inMsg.info.type !== "internal")
+                throw(Error("Internal expected"));
+            const inValue = inMsg.info.value.coins;
+
+            expect(instantWithdraw.transactions).toHaveTransaction({
+                from: pool.address,
+                to: firstOneOut.address,
+                op: Op.pool.withdrawal,
+                value: amountByImmediateRate + inValue - bcConf.lumpPrice - computedGeneric(reqTx).gasFees
+            });
+
+            const afterFirstWithdraw = await pool.getFullData();
+
+            expect(afterFirstWithdraw.totalBalance).toEqual(poolAfter.totalBalance - amountByImmediateRate);
+            expect(afterFirstWithdraw.supply).toEqual(poolAfter.supply - withdrawAmount);
+
+            // Let's test out on
+            const patientPanicker = depositors[1];
+
+            withdrawJetton = bc.openContract(DAOWallet.createFromAddress(
+                await poolJetton.getWalletAddress(patientPanicker.address)
+            ));
+
+            const withdrawAtRoundEnd = await withdrawJetton.sendBurnWithParams(patientPanicker.getSender(), toNano('1.05'),
+                withdrawAmount,
+                firstOneOut.address, true, false);
+
+            expect(withdrawAtRoundEnd.transactions).not.toHaveTransaction({
+                on: patientPanicker.address,
+                from: pool.address,
+                op: Op.pool.withdrawal,
+            });
+
+            await nextRound();
+            await pool.sendTouch(deployer.getSender());
+
+            const nextBorrower = curControllers[1];
+
+            vsetUpd = await nextBorrower.sendUpdateHash(validators[0].wallet.getSender())
+            await stakenController.sendUpdateHash(validators[0].wallet.getSender())
+            waitUnlock(vsetUpd.transactions[1].now);
+            await elector.sendTickTock("tick");
+            await elector.sendTickTock("tock");
+            // vsetUpd = await nextBorrower.sendUpdateHash(validators[0].wallet.getSender())
+
+            const nextRoundRecovery = await nextBorrower.sendRecoverStake(validators[0].wallet.getSender());
+            expect(nextRoundRecovery.transactions).toHaveTransaction({
+                on: pool.address,
+                from: nextBorrower.address,
+                op: Op.pool.loan_repayment,
+            });
+            expect(nextRoundRecovery.transactions).toHaveTransaction({
+                on: patientPanicker.address,
+                op: Op.payout.distributed_asset,
+                // Same withdraw amount, but at the end of the round will be higher due toNano
+                // balance is accounted for the recovered funds
+                // Yet it is still very close to immediate rate.
+                // Remember, immediate and withdraw are currently significantly different
+                value: (v) => v! > amountByImmediateRate && v! <= amountByImmediateRate + toNano('3')
+            });
+
+            const poolNextRound = await pool.getFullData();
+            // And now, one round later, withraw rate would finally drop
+            expect(poolNextRound.currentRound.withdrawRatePrev2X24).toBeLessThan(poolAfter.previousRound.withdrawRatePrev2X24);
+
+            // Let's check that after few rounds it will grow again
+
+            let prevState = poolNextRound;
+            for(let i = 0; i < 4; i++) {
+                // One of the first validator controllers is insolvent,
+                // so let's use different validator controllers for a change.
+                await runVdAction(validators[1]);
+                await nextRound();
+                await pool.sendTouch(deployer.getSender());
+                roundId++;
+                const curState = await pool.getFullData();
+                // Make sure withdrawal rate is gradually increasing every profitable step.
+                // First two rounds just borrows, and no returns
+                if(i > 2) {
+                    expect(curState.currentRound.withdrawRatePrev2X24).toBeGreaterThan(prevState.currentRound.withdrawRatePrev2X24);
+                }
+                prevState = curState;
+            }
         });
 
         /*WIP
